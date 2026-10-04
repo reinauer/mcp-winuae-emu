@@ -1,13 +1,4 @@
-/**
- * WinUAE connection management and launcher
- * Connects to BartmanAbyss WinUAE fork with GDB RSP server
- *
- * The Bartman fork (winuae-gdb.exe) requires portable mode:
- *   1. Write a default.uae alongside the exe with hardware settings
- *   2. Launch with -portable -G -s debugging_features=gdbserver -s debugging_trigger=
- *   3. The -G flag suppresses the settings panel (use_gui=no in config does NOT work)
- * The GDB server listens on port 2345 by default.
- */
+/** WinUAE process ownership and cross-platform GDB connection management. */
 
 import { spawn, ChildProcess } from 'child_process';
 import { GdbProtocol } from './gdb-protocol.js';
@@ -33,111 +24,29 @@ export class WinUAEConnection {
     this.config = config;
   }
 
-  /**
-   * Parse a WinUAE .uae config file into key-value Map.
-   * Skips comment lines (starting with ;) and blank lines.
-   */
-  private parseCfg(content: string): Map<string, string> {
-    const out = new Map<string, string>();
-    const lines = content.split(/[\r\n]+/g);
-    const re = /^([^=]+)=(.*)$/;
-    for (const line of lines) {
-      if (line.startsWith(';') || line.trim() === '') continue;
-      const match = line.match(re);
-      if (match) {
-        out.set(match[1], match[2]);
-      }
-    }
-    return out;
-  }
-
-  /**
-   * Stringify a config Map back to WinUAE .uae format.
-   */
-  private stringifyCfg(cfg: Map<string, string>): string {
-    let out = '';
-    cfg.forEach((value, key) => {
-      out += `${key}=${value}\r\n`;
-    });
-    return out;
-  }
-
-  /**
-   * Launch WinUAE (Bartman GDB fork) and connect to GDB server.
-   *
-   * Uses the portable mode approach (proven by vscode-amiga-debug):
-   * 1. Read user's config file into a Map
-   * 2. Merge GDB and GUI overrides
-   * 3. Write as default.uae alongside winuae-gdb.exe
-   * 4. Launch with -portable flag
-   * 5. Retry-connect to TCP port 2345
-   */
+  /** Launch WinUAE without modifying the user configuration. */
   async connect(): Promise<void> {
     if (this.isConnected) {
       throw new Error('Already connected to WinUAE');
     }
 
-    // Find WinUAE GDB executable
-    const exePath = path.join(this.config.winuaePath, 'winuae-gdb.exe');
-
-    if (!fs.existsSync(exePath)) {
-      throw new Error(
-        `winuae-gdb.exe not found at ${exePath}. ` +
-        `Download from https://github.com/BartmanAbyss/vscode-amiga-debug/tree/master/bin/win32 ` +
-        `and place in ${this.config.winuaePath}`
-      );
+    // WINUAE_PATH accepts an executable, an application bundle, or a directory.
+    const configuredPath = path.resolve(this.config.winuaePath);
+    const candidates = [configuredPath,
+      path.join(configuredPath, process.platform === 'win32' ? 'winuae.exe' : 'winuae'),
+      path.join(configuredPath, 'winuae64.exe'),
+      path.join(configuredPath, 'Contents', 'MacOS', 'WinUAE'),
+      path.join(configuredPath, 'WinUAE.app', 'Contents', 'MacOS', 'WinUAE')];
+    const exePath = candidates.find(candidate => {
+      try { return fs.statSync(candidate).isFile(); } catch { return false; }
+    });
+    if (!exePath) throw new Error(`WinUAE executable not found at ${configuredPath}`);
+    if (!this.config.configFile || !fs.existsSync(this.config.configFile)) {
+      throw new Error('Set WINUAE_CONFIG to an existing .uae configuration');
     }
-
-    // Read user's config file as base, or start with empty Map
-    let cfg = new Map<string, string>();
-    if (this.config.configFile && fs.existsSync(this.config.configFile)) {
-      try {
-        const content = fs.readFileSync(this.config.configFile, 'utf8');
-        cfg = this.parseCfg(content);
-        console.error(`[WinUAE] Read config: ${this.config.configFile} (${cfg.size} settings)`);
-      } catch (err) {
-        console.error(`[WinUAE] Warning: could not read config ${this.config.configFile}: ${err}`);
-      }
-    } else {
-      // Minimal A500 defaults when no user config
-      cfg.set('quickstart', 'a500,1');
-      cfg.set('ntsc', 'false');
-      console.error('[WinUAE] No user config found, using minimal A500 defaults');
+    if (!Number.isInteger(this.config.gdbPort) || this.config.gdbPort < 1 || this.config.gdbPort > 65535) {
+      throw new Error('Invalid WINUAE_GDB_PORT');
     }
-
-    // Remove debugging settings from config file -- they must be passed
-    // as -s CLI overrides because this WinUAE build (v4.10.1) ignores
-    // debugging_features and use_gui when read from the config file.
-    cfg.delete('debugging_features');
-    cfg.delete('debugging_trigger');
-    cfg.delete('use_gui');
-
-    // Keep these in config (they do work from file)
-    cfg.set('win32.start_not_captured', 'yes');
-    cfg.set('win32.nonotificationicon', 'yes');
-    cfg.set('boot_rom_uae', 'min');
-
-    // Safety: remove statefiles that could interfere
-    cfg.delete('statefile');
-
-    // Write merged config as default.uae alongside winuae-gdb.exe
-    const defaultUaePath = path.join(this.config.winuaePath, 'default.uae');
-
-    // Back up existing default.uae if it exists and is not one we generated
-    if (fs.existsSync(defaultUaePath)) {
-      try {
-        const existingContent = fs.readFileSync(defaultUaePath, 'utf8');
-        if (!existingContent.includes('; Generated by mcp-winuae-emu')) {
-          const backupPath = defaultUaePath + '.bak';
-          fs.copyFileSync(defaultUaePath, backupPath);
-          console.error(`[WinUAE] Backed up existing default.uae to ${backupPath}`);
-        }
-      } catch { /* ignore backup errors */ }
-    }
-
-    const header = '; Generated by mcp-winuae-emu for GDB debugging\r\n';
-    fs.writeFileSync(defaultUaePath, header + this.stringifyCfg(cfg), 'utf8');
-    console.error(`[WinUAE] Wrote config: ${defaultUaePath} (${cfg.size} settings)`);
 
     // Create log file
     const logDir = path.join(os.tmpdir(), 'winuae-mcp');
@@ -146,15 +55,23 @@ export class WinUAEConnection {
     }
     this.logFilePath = path.join(logDir, `winuae-${Date.now()}.log`);
     const logFd = fs.openSync(this.logFilePath, 'w');
+    let logOpen = true;
+    const closeLog = () => {
+      if (logOpen) { logOpen = false; fs.closeSync(logFd); }
+    };
 
-    // Launch args: -portable reads default.uae, -G suppresses settings panel,
-    // -s overrides enable GDB server (these MUST be CLI args, not in config file)
     const args = [
-      '-portable',
-      '-G',
+      '-f', path.resolve(this.config.configFile),
+      '-s', 'use_gui=no',
       '-s', 'debugging_features=gdbserver',
-      '-s', 'debugging_trigger=',
+      '-s', `gdb_port=${this.config.gdbPort}`,
     ];
+
+    if (process.platform === 'win32') {
+      for (const key of ['active_not_captured_pause', 'inactive_pause', 'iconified_pause']) {
+        args.push('-s', `win32.${key}=no`);
+      }
+    }
 
     // Inject floppy disk settings as CLI overrides
     for (const [drive, diskPath] of this.floppies) {
@@ -168,18 +85,19 @@ export class WinUAEConnection {
     this.process = spawn(exePath, args, {
       stdio: ['ignore', logFd, logFd],
       detached: false,
-      cwd: this.config.winuaePath,
+      cwd: path.dirname(exePath),
     });
 
     this.process.on('error', (err) => {
       console.error('[WinUAE] Process error:', err);
-      try { fs.closeSync(logFd); } catch {}
+      try { closeLog(); } catch {}
     });
 
+    const child = this.process;
     this.process.on('exit', (code) => {
       console.error(`[WinUAE] Process exited with code ${code}`);
-      try { fs.closeSync(logFd); } catch {}
-      this.cleanup();
+      try { closeLog(); } catch {}
+      if (this.process === child) { this.process = null; void this.cleanup(); }
     });
 
     // Wait for GDB server to become available
@@ -187,8 +105,8 @@ export class WinUAEConnection {
       await this.waitForGdb();
     } catch (err) {
       // Close log fd and clean up if GDB connection fails after launch
-      try { fs.closeSync(logFd); } catch {}
-      this.cleanup();
+      try { closeLog(); } catch {}
+      await this.cleanup();
       throw err;
     }
   }
@@ -235,6 +153,7 @@ export class WinUAEConnection {
    * Returns a status message describing what happened.
    */
   async connectSmart(): Promise<string> {
+    if (this.isConnected && !this.protocol?.connected) await this.cleanup();
     if (this.isConnected) {
       throw new Error('Already connected to WinUAE');
     }
@@ -284,8 +203,11 @@ export class WinUAEConnection {
    * Restart WinUAE with updated configuration (preserves floppy state).
    */
   async restart(): Promise<string> {
+    if (this.isConnected && !this.process) {
+      throw new Error('Restart requires an instance launched by this MCP server');
+    }
     console.error('[WinUAE] Restarting with updated configuration...');
-    this.cleanup();
+    await this.cleanup();
     await this.connect();
     return `Restarted WinUAE and connected to GDB server on port ${this.config.gdbPort}`;
   }
@@ -294,18 +216,15 @@ export class WinUAEConnection {
    * Disconnect and kill WinUAE
    */
   async disconnect(): Promise<void> {
-    if (!this.isConnected) {
-      return;
-    }
 
-    this.cleanup();
+    await this.cleanup();
     if (this.logFilePath) {
       console.error(`[WinUAE] Log file saved: ${this.logFilePath}`);
     }
     console.error('[WinUAE] Disconnected');
   }
 
-  private cleanup(): void {
+  private async cleanup(): Promise<void> {
     this.isConnected = false;
 
     if (this.protocol) {
@@ -313,9 +232,14 @@ export class WinUAEConnection {
       this.protocol = null;
     }
 
-    if (this.process) {
-      this.process.kill();
-      this.process = null;
+    const child = this.process;
+    this.process = null;
+    if (child && child.exitCode === null && child.signalCode === null) {
+      await new Promise<void>(resolve => {
+        const timer = setTimeout(() => child.kill('SIGKILL'), 2000);
+        child.once('exit', () => { clearTimeout(timer); resolve(); });
+        child.kill('SIGINT');
+      });
     }
   }
 
@@ -333,7 +257,7 @@ export class WinUAEConnection {
    * Check if connected
    */
   get connected(): boolean {
-    return this.isConnected;
+    return this.isConnected && !!this.protocol?.connected;
   }
 
   /**
@@ -360,7 +284,7 @@ export class WinUAEConnection {
     if (filePath) {
       this.floppies.set(drive, filePath);
     } else {
-      this.floppies.delete(drive);
+      this.floppies.set(drive, ''); // Override disks present in the base configuration.
     }
   }
 

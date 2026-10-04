@@ -1,6 +1,6 @@
 # mcp-winuae-emu
 
-An [MCP](https://modelcontextprotocol.io/) server that provides Amiga 68k debugging tools through the WinUAE emulator. It connects to a [custom WinUAE fork](https://github.com/axewater/WinUAE/tree/gdb-write-commands) via GDB Remote Serial Protocol (RSP), giving AI assistants direct read-write access to the emulated Amiga hardware.
+An [MCP](https://modelcontextprotocol.io/) server that provides Amiga 68k debugging tools through the WinUAE emulator. It connects to [WinUAE](https://github.com/reinauer/WinUAE) via GDB Remote Serial Protocol (RSP), giving AI assistants direct read-write access to the emulated Amiga hardware.
 
 ## What it does
 
@@ -8,18 +8,24 @@ This server lets an AI assistant (Claude, etc.) launch WinUAE, connect to its GD
 
 ## Quick Start
 
-### 1. Download the pre-built WinUAE binary
+### 1. Build WinUAE with GDB support
 
-Download `winuae-gdb.exe` from the [WinUAE fork releases](https://github.com/axewater/WinUAE/releases) and place it in a directory (e.g., `C:\apps\winuae\`).
+Use a build containing the optional GDB server from
+[reinauer/WinUAE](https://github.com/reinauer/WinUAE). Older release binaries
+may not include it. The same interface supports Windows, macOS and Linux.
+macOS and Linux have been exercised end to end; native Windows validation
+is still pending.
 
-This is a custom build of [BartmanAbyss's WinUAE fork](https://github.com/BartmanAbyss/WinUAE) with added register and memory write support. See the [patch details](https://github.com/axewater/WinUAE/blob/gdb-write-commands/HANDOVER.md).
+Set `WINUAE_PATH` to the executable, its directory, or a macOS `.app` bundle.
+Use the normal WinUAE executable name. Set `WINUAE_CONFIG` explicitly to an
+existing `.uae` file with a valid Kickstart ROM path.
 
 ### 2. Install the MCP server
 
 ```bash
-git clone https://github.com/axewater/mcp-winuae-emu.git
+git clone https://github.com/reinauer/mcp-winuae-emu.git
 cd mcp-winuae-emu
-npm install
+npm ci
 npm run build
 ```
 
@@ -47,19 +53,20 @@ Add to your MCP settings (`~/.claude/claude_desktop_config.json` or project `.mc
 You need a valid Amiga Kickstart ROM file (e.g., Kickstart 1.3 for A500) and a WinUAE `.uae` config file. A minimal config:
 
 ```ini
-cpu_type=68000
+cpu_model=68000
 chipset=ocs
 chipmem_size=1
 kickstart_rom_file=C:\path\to\kickstart.rom
 ```
 
-The server reads your config, merges in GDB-required settings, and launches `winuae-gdb.exe` automatically.
+The server passes your configuration to WinUAE and enables GDB with
+command-line overrides. It does not modify the configuration file.
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `WINUAE_PATH` | `C:\apps\winuae` | Directory containing `winuae-gdb.exe` |
+| `WINUAE_PATH` | `C:\apps\winuae` | Executable, executable directory, or macOS app bundle |
 | `WINUAE_CONFIG` | `<WINUAE_PATH>\Configurations\A500-Dev.uae` | Path to your `.uae` config file |
 | `WINUAE_GDB_PORT` | `2345` | GDB server TCP port |
 | `WINUAE_DEBUG` | `0` | Set to `1` to enable GDB protocol debug logging |
@@ -71,7 +78,7 @@ The server reads your config, merges in GDB-required settings, and launches `win
 | Tool | Description |
 |---|---|
 | `winuae_connect` | Launch WinUAE and connect to GDB server |
-| `winuae_disconnect` | Disconnect and stop the emulator |
+| `winuae_disconnect` | Disconnect; stop only an emulator launched by this server |
 | `winuae_status` | Check if connected and responsive |
 
 ### Memory
@@ -92,7 +99,7 @@ The server reads your config, merges in GDB-required settings, and launches `win
 | `winuae_step` | Single-step N instructions |
 | `winuae_continue` | Resume execution |
 | `winuae_pause` | Pause execution and read registers |
-| `winuae_reset` | Pause CPU and read current register state |
+| `winuae_reset` | Restart an owned emulator and read its registers |
 
 ### Breakpoints & Watchpoints
 
@@ -109,21 +116,35 @@ The server reads your config, merges in GDB-required settings, and launches `win
 |---|---|
 | `winuae_custom_registers` | Read and decode all custom chip registers ($DFF000-$DFF1FE) |
 | `winuae_copper_disassemble` | Decode a Copper list (WAIT, MOVE, SKIP, END) |
-| `winuae_disassemble` | Basic m68k disassembly |
+| `winuae_disassemble` | Use WinUAE's m68k disassembler |
+| `winuae_screenshot` | Save a PNG screenshot to a native host path |
 
 ## How it works
 
-1. **Launch**: Reads your `.uae` config, merges GDB settings, spawns `winuae-gdb.exe -portable -G -s debugging_features=gdbserver -s debugging_trigger=`
-2. **Connect**: Retries TCP connection to `localhost:2345` until the GDB server is ready
-3. **Protocol**: Communicates via [GDB RSP](https://sourceware.org/gdb/current/onlinedocs/gdb.html/Remote-Protocol.html) -- packet framing, checksums, ack mode, register/memory commands, breakpoint commands, etc.
+1. **Connect**: Try an existing server on `127.0.0.1:2345`, or the configured port.
+2. **Launch**: If needed, launch WinUAE with `-f <config>`, `-s use_gui=no`,
+   `-s debugging_features=gdbserver` and `-s gdb_port=<port>`. Windows launch
+   overrides also disable focus/minimize pause for the owned process.
+3. **Debug**: Use GDB RSP for registers, memory, breakpoints and execution
+   control. Guest-state operations pause execution first. Tool calls are
+   serialized so their pause/read/write sequences do not overlap.
+4. **Shutdown**: Disconnect stops only a process this server launched.
+   Restart waits for that child to exit before launching its replacement.
+   Closing the MCP input stream also cleans up the owned process.
 
 ### Technical notes
 
-- The `-G` flag and `-s` overrides **must** be CLI arguments. This WinUAE build (v4.10.1) ignores `use_gui` and `debugging_features` when set in the config file.
-- The GDB server sends `O` packets (console output) on connect. The protocol handler skips these automatically.
-- Custom chip register reads use 64-byte chunks because the GDB server has read-size limits for hardware I/O addresses.
-- ECS/AGA-only registers ($DFF1C0+) return zeros on OCS chipset configurations.
-- CIA registers ($BFE001/$BFD000) are not accessible through the GDB memory read interface.
+- Both `OK` replies and hexadecimal `O` console-output packets are handled.
+- Large memory reads and writes are split into bounded requests.
+- SR is written before A7 because changing CPU privilege mode switches stacks.
+- Custom registers use the emulator's saved snapshot; CIA reads are unsupported.
+- Native screenshot paths support spaces and Unicode. Unix PNG output requires
+  a WinUAE build with libpng.
+- Reset and disk insertion/ejection restart an owned emulator. They cannot
+  restart an externally launched instance.
+- Release a host UI pause before connecting to an existing instance.
+- Explicitly set both path variables on macOS/Linux and when using an
+  executable or application-bundle path; defaults retain the Windows layout.
 
 ## Credits
 
@@ -134,10 +155,14 @@ The server reads your config, merges in GDB-required settings, and launches `win
 
 ## Limitations
 
-- **Windows only** -- requires WinUAE
-- **Basic disassembly** -- the disassembler only recognizes a few opcodes (RTS, NOP, RTE, etc.); all others show as `DC.W`
-- **No CIA access** -- CIA-A/CIA-B registers are not mapped through the GDB server
-- **Single connection** -- the GDB server accepts one client at a time
+- Requires a WinUAE build containing the optional GDB server.
+- Binary loading copies bytes into RAM; it does not relocate or execute
+  Amiga Hunk files.
+- CPU/DMA profiling and the debug overlay are not exposed.
+- Memory addresses are physical; ROM writes and arbitrary I/O access fail.
+- Watchpoints cover CPU data accesses, not DMA, and follow the emulator's
+  documented range and MMU-debugger restrictions.
+- The GDB server accepts one local client at a time.
 
 ## License
 

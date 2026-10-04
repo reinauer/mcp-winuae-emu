@@ -259,7 +259,7 @@ const tools: Tool[] = [
   // Connection tools
   {
     name: 'winuae_connect',
-    description: 'Launch WinUAE (BartmanAbyss fork) and connect to GDB RSP server. Must be called before any other WinUAE commands. Set WINUAE_PATH env var to override default path.',
+    description: 'Launch WinUAE and connect to GDB RSP server. Must be called before any other WinUAE commands. Set WINUAE_PATH env var to override default path.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -633,7 +633,7 @@ async function handleToolCall(name: string, args: any): Promise<{ content: Array
       }
 
       case 'winuae_disconnect': {
-        if (!connection?.connected) {
+        if (!connection) {
           return { content: [{ type: 'text', text: 'Not connected to WinUAE' }] };
         }
         await connection.disconnect();
@@ -818,6 +818,9 @@ async function handleToolCall(name: string, args: any): Promise<{ content: Array
           return { content: [{ type: 'text', text: 'No registers specified to write' }] };
         }
 
+        // Apply SR before A7 because changing privilege mode switches stacks.
+        toWrite.sort((a, b) => (a.idx === 16 ? -1 : b.idx === 16 ? 1 : 0));
+
         // Write one register at a time, verify each before proceeding.
         // The WinUAE GDB server needs time between register writes.
         const results: string[] = [];
@@ -955,8 +958,8 @@ async function handleToolCall(name: string, args: any): Promise<{ content: Array
         if (!path.isAbsolute(filepath)) {
           filepath = path.join(os.tmpdir(), filepath);
         }
-        // Use Windows backslash path for the WinUAE side
-        const winPath = filepath.replace(/\//g, '\\');
+        // Use the native host path, including spaces and Unicode.
+        const winPath = filepath;
         const result = await protocol.sendMonitorCommand(`screenshot ${winPath}`);
         if (result.startsWith('OK')) {
           // result format: "OK WxH filepath"
@@ -992,23 +995,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools,
 }));
 
+// Keep each tool's pause/read/write sequence together on the RSP connection.
+let toolQueue: Promise<unknown> = Promise.resolve();
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
-  return handleToolCall(name, args || {});
+  const result = toolQueue.then(() => handleToolCall(name, args || {}));
+  toolQueue = result.catch(() => undefined);
+  return result;
 });
 
 // Handle shutdown
 process.on('SIGINT', async () => {
-  if (connection?.connected) {
+  if (connection) {
     await connection.disconnect();
   }
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
-  if (connection?.connected) {
+  if (connection) {
     await connection.disconnect();
   }
+  process.exit(0);
+});
+
+// A closed MCP transport must not leave its emulator child running.
+process.stdin.on('end', async () => {
+  if (connection) await connection.disconnect();
   process.exit(0);
 });
 
