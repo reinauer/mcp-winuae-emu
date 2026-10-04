@@ -256,6 +256,19 @@ function isDiskImage(filePath: string): boolean {
 // ─── Tool Definitions ────────────────────────────────────────────────
 
 const tools: Tool[] = [
+  {
+    name: 'winuae_process_breakpoint',
+    description: 'Arm a one-shot stop at an AmigaDOS program entry, or inspect/clear it. Does not launch the program. Names match case-insensitively; bare names match the basename. Continue execution after arming.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['set', 'status', 'clear'] },
+        name: { type: 'string', description: 'ASCII process or CLI command name' },
+        address: { type: ['string', 'number'], description: 'AmigaDOS Process address; alternative to name' },
+      },
+      required: ['action'],
+    },
+  },
   // Connection tools
   {
     name: 'winuae_connect',
@@ -621,6 +634,32 @@ const tools: Tool[] = [
 async function handleToolCall(name: string, args: any): Promise<{ content: Array<{ type: string; text?: string }> }> {
   try {
     switch (name) {
+      case 'winuae_process_breakpoint': {
+        if (!connection?.connected) throw new Error('Not connected to WinUAE');
+        const protocol = connection.getProtocol();
+        if (args.action === 'set') {
+          if ((args.name !== undefined) === (args.address !== undefined)) {
+            throw new Error('Supply exactly one of name or address');
+          }
+          if (args.name !== undefined) {
+            if (typeof args.name !== 'string' || !/^[\x20-\x7e]{1,255}$/.test(args.name)) {
+              throw new Error('Name must contain 1-255 printable ASCII characters');
+            }
+            await protocol.sendMonitorCommand(`process-break name ${args.name}`);
+          } else {
+            const address = parseHexOrDecimal(args.address);
+            if (!Number.isInteger(address) || address <= 0 || address > 0xffffffff || address % 4) {
+              throw new Error('Process address must be a nonzero aligned 32-bit address');
+            }
+            await protocol.sendMonitorCommand(`process-break address ${address.toString(16)}`);
+          }
+        } else if (args.action === 'clear') {
+          await protocol.sendMonitorCommand('process-break clear');
+        } else if (args.action !== 'status') {
+          throw new Error('Action must be set, status or clear');
+        }
+        return { content: [{ type: 'text', text: await protocol.sendMonitorCommand('process-break status') }] };
+      }
       case 'winuae_connect': {
         if (connection?.connected) {
           return { content: [{ type: 'text', text: 'Already connected to WinUAE' }] };

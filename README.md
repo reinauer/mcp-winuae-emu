@@ -167,3 +167,10 @@ command-line overrides. It does not modify the configuration file.
 ## License
 
 MIT
+
+### AmigaDOS program entry
+
+`winuae_process_breakpoint` sets, inspects or clears a one-shot entry stop.
+Select a printable ASCII process/CLI command `name` or a Process `address`,
+then continue execution and launch the program in the guest. This uses the
+portable WinUAE debug branch and does not change console breakpoints.
