@@ -463,6 +463,18 @@ export class GdbProtocol {
    * Single step: sends 'vCont;s', waits for stop reply (step always stops quickly)
    * Uses the negotiated vCont execution interface.
    */
+  async rangeStep(start: number, end: number): Promise<void> {
+    if (![start, end].every(v => Number.isInteger(v) && v >= 0 && v <= 0xffffffff) || start > end) {
+      throw new Error('Range must contain ordered 32-bit addresses');
+    }
+    if (this._isRunning) await this.pause();
+    const supported = await this.sendCommand('vCont?');
+    if (!supported.split(';').includes('r')) throw new Error('Target does not support range stepping');
+    this.pendingStopReply = null;
+    this._isRunning = true;
+    this.sendPacket(`vCont;r${start.toString(16)},${end.toString(16)}`);
+  }
+
   async step(): Promise<string> {
     if (this._isRunning) await this.pause();
     this.pendingStopReply = null;

@@ -289,6 +289,18 @@ const tools: Tool[] = [
       required: ['action'],
     },
   },
+  {
+    name: 'winuae_range_step',
+    description: 'Execute at least one instruction and stop when PC leaves [start,end), or another stop fires. Starts asynchronously; use pause to inspect the stop. Equal bounds single-step.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start: { type: ['string', 'number'], description: 'Inclusive range start' },
+        end: { type: ['string', 'number'], description: 'Exclusive range end' },
+      },
+      required: ['start', 'end'],
+    },
+  },
   // Connection tools
   {
     name: 'winuae_connect',
@@ -709,6 +721,11 @@ async function handleToolCall(name: string, args: any): Promise<{ content: Array
           throw new Error('Action must be set, status or clear');
         }
         return { content: [{ type: 'text', text: await protocol.sendMonitorCommand('exception') }] };
+      }
+      case 'winuae_range_step': {
+        if (!connection?.connected) throw new Error('Not connected to WinUAE');
+        await connection.getProtocol().rangeStep(parseHexOrDecimal(args.start), parseHexOrDecimal(args.end));
+        return { content: [{ type: 'text', text: 'Range stepping started. Use pause to inspect the stop.' }] };
       }
       case 'winuae_connect': {
         if (connection?.connected) {
