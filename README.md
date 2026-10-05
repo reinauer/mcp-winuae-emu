@@ -201,3 +201,11 @@ are excluded. Keep the returned ID for `remove`, or use `list` to inspect
 remote DMA entries. Stops include the actual source mask and custom register.
 These entries are independent of standard GDB CPU watchpoints and are
 removed on disconnect.
+
+`winuae_guest_output` controls and reads guest diagnostics sent through the
+existing uaelib function 86. Capture is opt-in, limited to 64 records and
+4096 bytes, with individual messages capped at 1024 bytes. Record IDs and
+truncation/eviction counters make data loss visible. Reads are nondestructive;
+`off` retains records and `clear` preserves the enable setting. Disconnect
+and reset disable and clear capture. This does not capture guest console or
+serial output, and does not alter the emulator's host logging.
