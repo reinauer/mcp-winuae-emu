@@ -890,7 +890,7 @@ async function handleToolCall(name: string, args: any): Promise<CallToolResult> 
         if (fileData.length >= 4) {
           const magic = fileData.readUInt32BE(0);
           if (magic === 0x000003F3) {
-            console.error(`[WinUAE] Detected hunk executable: ${absPath}`);
+            throw new Error('Hunk executables require winuae_hunk_load with explicit RAM placements');
           }
         }
 

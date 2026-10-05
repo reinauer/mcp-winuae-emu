@@ -250,3 +250,24 @@ between rows of the same plane). The default stride is a word-aligned
 row. Explicit addresses and stride also support interleaved planes.
 Limits are 262144 pixels and 2 MiB of guest reads. HAM/EHB interpretation
 and display-mode detection are intentionally outside this tool.
+
+### Executable inspection and loading
+
+`winuae_hunk_inspect` validates Hunk executables before returning segment
+sizes, CHIP/FAST requirements, relocation counts and up to 1024 symbols.
+The parser supports CODE, DATA, BSS, RELOC32, RELOC32SHORT (including the
+historical DREL32 encoding), NAME, SYMBOL, DEBUG and END. It rejects
+other records, overlays and extended memory requirements explicitly.
+Files are limited to 16 MiB, allocations to 8 MiB and hunks to 256.
+
+`winuae_hunk_load` requires one `{address, capacity, memory}` placement
+per hunk, where `memory` is `chip` or `fast`. Reserve those guest RAM
+regions yourself and provide their actual memory kind. This is a debug
+loader, not AmigaDOS LoadSeg: it does not allocate guest memory, build
+segment lists or start a process. It validates all relocations before
+writing, zeroes BSS and padding, verifies every hunk, and attempts to
+restore the original bytes on failure. If rollback also fails the
+error explicitly identifies possibly modified hunks. Use normal
+AmigaDOS loading plus process-entry breakpoints for OS applications.
+The raw `winuae_load` tool now rejects Hunk files instead of copying
+their headers into executable memory.
