@@ -277,6 +277,18 @@ const tools: Tool[] = [
       properties: { address: { type: ['string', 'number'], description: 'Optional Process address; defaults to the current task' } },
     },
   },
+  {
+    name: 'winuae_exceptions',
+    description: 'Select CPU exception stops and inspect the last fault snapshot. Set vectors such as 2=bus error, 3=address error, 4=illegal instruction, 5=divide by zero. Current registers are after exception-frame construction; the snapshot preserves pre-frame D0-D7,A0-A7,SR,PC and instruction_pc.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['set', 'status', 'clear'] },
+        vectors: { type: 'array', items: { type: 'integer', minimum: 2, maximum: 63 }, description: 'Complete replacement set of exception vectors' },
+      },
+      required: ['action'],
+    },
+  },
   // Connection tools
   {
     name: 'winuae_connect',
@@ -679,6 +691,24 @@ async function handleToolCall(name: string, args: any): Promise<{ content: Array
           command += ` ${address.toString(16)}`;
         }
         return { content: [{ type: 'text', text: await connection.getProtocol().sendMonitorCommand(command) }] };
+      }
+      case 'winuae_exceptions': {
+        if (!connection?.connected) throw new Error('Not connected to WinUAE');
+        const protocol = connection.getProtocol();
+        if (args.action === 'set') {
+          if (!Array.isArray(args.vectors) || args.vectors.length > 62 ||
+              args.vectors.some((v: unknown) => typeof v !== 'number' || !Number.isInteger(v) || v < 2 || v > 63)) {
+            throw new Error('Vectors must be an array of integers from 2 to 63');
+          }
+          let mask = 0n;
+          for (const vector of args.vectors) mask |= 1n << BigInt(vector);
+          await protocol.sendMonitorCommand(`exception-mask ${mask.toString(16)}`);
+        } else if (args.action === 'clear') {
+          await protocol.sendMonitorCommand('exception-mask 0');
+        } else if (args.action !== 'status') {
+          throw new Error('Action must be set, status or clear');
+        }
+        return { content: [{ type: 'text', text: await protocol.sendMonitorCommand('exception') }] };
       }
       case 'winuae_connect': {
         if (connection?.connected) {
