@@ -181,3 +181,10 @@ offset by adding the corresponding segment address. Sizes describe allocated
 payload bounds, including any padding; they are not exact code lengths.
 The emulator validates bounded CLI and Workbench lists and rejects corrupt
 metadata. It does not load host symbol files into the emulation core.
+
+`winuae_exceptions` replaces the selected exception vectors (`action: set`,
+`vectors: [2,3,4,5,6,7,8,10,11]`), disables them (`clear`), or queries the mask
+and last captured fault (`status`). Masks are independent of console stops
+and clear on disconnect. Execution stops after exception-frame construction;
+inspect `last.instruction_pc` and the pre-frame register snapshot for fault
+diagnosis, and normal register tools for the current handler-entry state.
