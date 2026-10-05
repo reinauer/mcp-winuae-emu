@@ -242,3 +242,11 @@ boundaries. `max_matches` bounds the response; `next_address` and
 `remaining` allow continuation when `limit_reached` is true. Alignment
 uses absolute guest addresses. Unreadable memory is an error, not a hole
 silently skipped by the search.
+
+`winuae_bitmap` returns a PNG image decoded from 1-8 indexed bitplanes.
+Supply `width`, `height`, `planes` (addresses, least significant first),
+`palette` (exactly 2^planes RGB values) and optionally `row_stride` (bytes
+between rows of the same plane). The default stride is a word-aligned
+row. Explicit addresses and stride also support interleaved planes.
+Limits are 262144 pixels and 2 MiB of guest reads. HAM/EHB interpretation
+and display-mode detection are intentionally outside this tool.
