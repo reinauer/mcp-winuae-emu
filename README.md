@@ -373,3 +373,21 @@ not simultaneously drive the same control from the host and MCP. Reset,
 checkpoint restore and disconnect release remote controls. Input recording
 and playback reject new remote input. A paused guest cannot consume key
 transitions; frame-timed sequences are needed for reliable taps and typing.
+
+`winuae_input_sequence` accepts up to 256 steps with `after_frames` relative
+to the previous step (maximum 3600 frames total). Submission validates the
+whole sequence before changing input. Execution starts at a frame boundary;
+zero delays group events at that boundary. Sequences freeze during debugger
+or host pauses. Completion releases any remaining held controls.
+
+`winuae_key_tap` supplies a raw key or chord. `winuae_type_text` requires
+`layout: us`, meaning the **guest** must use the US Amiga keymap. It supports
+printable ASCII, tab and newline; unsupported text fails before submission.
+Both helpers default to three frames held and three frames between taps.
+Their generated events must fit the same sequence limits. Long text can
+be split into batches after each preceding sequence completes.
+
+Sequences are asynchronous and do not resume execution unless explicitly
+passed `resume: true`. Query `winuae_input` with `action: status`; use
+`action: release` to cancel and release held controls. A sequence requires
+no existing remote held input, and concurrent submissions are rejected.
