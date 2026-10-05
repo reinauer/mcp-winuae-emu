@@ -507,6 +507,16 @@ export class GdbProtocol {
     this.sendPacket(`vCont;r${start.toString(16)},${end.toString(16)}`);
   }
 
+  async stepOver(): Promise<void> {
+    if (this._isRunning) await this.pause();
+    this.pendingStopReply = null;
+    this._isRunning = true;
+    try {
+      const reply = await this.sendCommand(`qRcmd,${Buffer.from('step-over').toString('hex')}`);
+      if (reply !== 'OK') throw new Error(`Step over failed: ${reply}`);
+    } catch (e) { this._isRunning = false; throw e; }
+  }
+
   async step(): Promise<string> {
     if (this._isRunning) await this.pause();
     this.pendingStopReply = null;

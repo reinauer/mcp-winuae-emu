@@ -3,12 +3,22 @@ import { GdbProtocol } from './gdb-protocol.js';
 import { capabilities, requireCommand } from './target-info.js';
 import { listSymbols, readSymbol } from './symbols.js';
 import { parseHunk, loadHunks } from './amiga-hunk.js';
-import { boundedFile } from './debug-validation.js';
+import { boundedFile, integer } from './debug-validation.js';
 import { readBitmap } from './bitmap.js';
 import { searchMemory } from './memory-search.js';
 import { captureSnapshot, postmortem } from './diagnostics.js';
 
+const conditionRegisters = [...Array.from({length:8}, (_,i)=>`D${i}`), ...Array.from({length:8}, (_,i)=>`A${i}`), 'PC', 'USP', 'MSP', 'ISP', 'VBR', 'SR'];
+const conditionOperators = ['eq', 'ne', 'le', 'ge', 'lt', 'gt'];
 export const debugTools: Tool[] = [
+  { name: 'winuae_tasks', description: 'Read bounded Exec current, ready and waiting task lists, names, saved stack pointers and stack bounds. Does not claim a suspended task has the current CPU registers.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'winuae_history', description: 'Read the existing debugger PC history, or enable/disable instruction recording for remote execution. Recording is opt-in and slows execution. Entries are chronological and adjacent identical PCs may be coalesced by the debugger.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['read','on','off'], default: 'read' }, count: { type: 'integer', minimum: 1, maximum: 128, default: 32 } } } },
+  { name: 'winuae_step_over', description: 'Resume until the next sequential instruction address, using the existing debugger step-over machinery. Returns immediately; use wait_stop or pause. Branches that never reach that address require interruption.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'winuae_conditional_breakpoint', description: 'Manage remote-owned register conditions in the existing debugger breakpoint table. Conditions are checked on instruction boundaries, with optional signed comparison and mask. Use the ordinary breakpoint tool for PC addresses.', inputSchema: { type: 'object', properties: {
+    action: { type: 'string', enum: ['add','remove','list'] }, id: { type: 'integer', minimum: 0 },
+    register: { type: 'string', enum: conditionRegisters.filter(r=>r!=='PC') }, operator: { type: 'string', enum: conditionOperators },
+    value: { type: ['integer','string'] }, mask: { type: ['integer','string'], default: '0xffffffff' }, signed: { type: 'boolean', default: false }
+  }, required: ['action'] } },
   { name: 'winuae_capabilities', description: 'Discover target commands, CPU/MMU models, execution controls and address semantics. Queries the current configuration; leaves execution paused.', inputSchema: { type: 'object', properties: {} } },
   { name: 'winuae_memory_map', description: 'Report the existing debugger memory map with RAM/ROM/I/O and chip-memory classification. A truncated map is explicitly marked. Map membership does not reserve guest memory.', inputSchema: { type: 'object', properties: {} } },
   { name: 'winuae_symbols', description: 'List bounded Hunk or ELF32 big-endian m68k symbols and section metadata from a host file. Includes a file hash; does not infer runtime relocation or C types.',
@@ -58,6 +68,27 @@ export async function handleDebugTool(name: string, args: Record<string, unknown
   };
   let result: unknown;
   switch (name) {
+    case 'winuae_tasks': await requireCommand(target(), 'tasks'); result = JSON.parse(await target().sendMonitorCommand('tasks')); break;
+    case 'winuae_history': {
+      const action = args.action ?? 'read', count = integer(args.count ?? 32, 'count', 128, 1);
+      if (!['read','on','off'].includes(action as string)) throw new Error('Unknown history action');
+      await requireCommand(target(), 'history');
+      if (action !== 'read') await target().sendMonitorCommand(`history ${action}`);
+      result = JSON.parse(await target().sendMonitorCommand(`history read ${count.toString(16)}`)); break;
+    }
+    case 'winuae_step_over': await requireCommand(target(), 'step-over'); await target().stepOver(); result = { running: target().isRunning }; break;
+    case 'winuae_conditional_breakpoint': {
+      let command = 'condition list';
+      if (args.action === 'add') {
+        const reg = conditionRegisters.indexOf(args.register as string), op = conditionOperators.indexOf(args.operator as string);
+        if (reg < 0 || reg === 16 || op < 0 || (args.signed !== undefined && typeof args.signed !== 'boolean')) throw new Error('Invalid register condition');
+        command = `condition add ${[reg,op,integer(args.value,'value'),integer(args.mask ?? 0xffffffff,'mask'),args.signed ? 1 : 0].map(n=>n.toString(16)).join(' ')}`;
+      } else if (args.action === 'remove') command = `condition remove ${integer(args.id,'id',255).toString(16)}`;
+      else if (args.action !== 'list') throw new Error('Unknown condition action');
+      await requireCommand(target(), 'condition');
+      const reply = await target().sendMonitorCommand(command);
+      result = reply === 'OK' ? { removed: args.id } : JSON.parse(reply); break;
+    }
     case 'winuae_capabilities': result = await capabilities(target()); break;
     case 'winuae_memory_map': await requireCommand(target(), 'memory-map'); result = JSON.parse(await target().sendMonitorCommand('memory-map')); break;
     case 'winuae_symbols': result = await listSymbols(args); break;

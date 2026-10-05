@@ -307,3 +307,14 @@ it explicitly reports truncation. Hunk loading now requires target
 `memory-check` support and validates every placement's writable RAM and
 memory kind before the first write. These checks do not allocate RAM or
 establish that the application owns it.
+
+`winuae_tasks` reports Exec current/ready/waiting lists, saved SP and stack
+bounds. `winuae_history` reads the existing debugger history and supports
+`on`/`off` recording controls. Recording slows execution and coalesces
+adjacent identical PCs; D/A registers and beam positions are included.
+`winuae_step_over` resumes toward the next sequential instruction using
+the console debugger's trace mode; wait or interrupt with the existing
+tools. `winuae_conditional_breakpoint` adds/lists/removes remote-owned
+register comparisons in the existing breakpoint table. Conditions
+support eq/ne/le/ge/lt/gt, a mask and signed comparisons. All these tools
+check target capabilities before use.
