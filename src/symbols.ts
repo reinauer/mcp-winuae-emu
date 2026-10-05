@@ -57,7 +57,11 @@ export function parseSymbols(file: Buffer): Symbols {
       const name = string(table.link, record.readUInt32BE()); if (!name) continue;
       const value = record.readUInt32BE(4), size = record.readUInt32BE(8);
       const relative = type === 1 ? value : value - section.address;
-      if (relative < 0 || relative + size > section.size) throw new Error(`Symbol ${name} exceeds its section`);
+      // Linker-defined zero-sized NOTYPE markers may sit in alignment
+      // padding beyond the last section byte. Listing them is valid; reads
+      // still have to satisfy the section bounds.
+      if (relative < 0 || (relative + size > section.size && ((record[12] & 15) !== 0 || size !== 0)))
+        throw new Error(`Symbol ${name} exceeds its section`);
       const symbol = { name, section: sectionIndex, offset: relative, size: size || null };
       const key = JSON.stringify(symbol);
       if (!seen.has(key)) { seen.add(key); symbols.push(symbol); }

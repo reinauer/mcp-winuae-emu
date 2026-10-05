@@ -292,7 +292,7 @@ is a caller-supplied byte offset, and `section` disambiguates duplicate
 names. Reads are bounded by the symbol size when known, section size,
 mapped segment size and a 4096-byte response limit. No default 32-byte
 read, guessed C layout, DWARF expression evaluation or automatic member
-lookup is performed. DWARF-aware C inspection remains separate work.
+lookup is performed. Use the dedicated DWARF tools below for C-type inspection.
 
 File-format references: [AmigaDOS executable format, chapter 11](https://developer.amigaos3.net/sites/default/files/downloads/2024-10/Amiga_ROM_Kernel_Reference_Manual_DOS.pdf)
 and the [generic ELF ABI](https://gabi.xinuos.com/elf/05-symtab.html).
@@ -318,3 +318,42 @@ tools. `winuae_conditional_breakpoint` adds/lists/removes remote-owned
 register comparisons in the existing breakpoint table. Conditions
 support eq/ne/le/ge/lt/gt, a mask and signed comparisons. All these tools
 check target capabilities before use.
+
+### DWARF source, variables and call stacks
+
+Run `npm run setup:dwarf` to create an isolated `.venv-dwarf` containing
+Python's `pyelftools==0.32`. Python 3 must already be installed. The tools
+use this environment automatically; `WINUAE_PYTHON` can select another
+Python executable containing that version. Other MCP tools do not need
+Python. No target code, debugger startup scripts or source files are
+executed by the helper.
+
+`winuae_source`, `winuae_variable` and `winuae_backtrace` take a linked
+ELF32 big-endian m68k `file` and explicit section `mappings`, using the
+same segment/address mapping syntax as symbol reads. The ELF must match
+the guest executable. These tools currently require MMU-disabled targets
+because remote memory access is physical. Source lookup defaults to PC
+or accepts `address`. `context: "fault"` uses the pre-frame registers only
+when they match the current exception stop.
+
+Variable expressions support `name.member`, `name->member` and `name[index]`.
+Locals and parameters use their active DWARF location, frame base and CFI.
+Structures, unions, one-dimensional arrays, pointers and supported scalar
+types use their declared offsets and element sizes. Pointers are only
+followed with an explicit selector. Unsupported operations, dynamic
+bounds, bitfields, ambiguous names and optimized-out locations produce
+errors; they are never replaced with guessed layouts or default reads.
+
+Backtraces use `.debug_frame`/`.eh_frame` CFI, including m68k return columns
+24 and 25. The report identifies why unwinding stopped if information is
+missing, unsupported or inconsistent. There is no stack-scanning fallback.
+Source lookup includes inline function names and source file/line data.
+Postmortem reports optionally accept `file` and `mappings` to attach a
+backtrace from the selected fault/current context; unavailable unwind
+support is recorded without discarding the rest of the crash report.
+
+Analysis is bounded to 15 seconds, 16 MiB ELF files, 4 MiB per debug
+section, 64 frames, 4096 bytes per value and 64 KiB of total guest reads.
+Value expansion has depth/member/element limits. DWARF parsing is provided
+by [pyelftools](https://github.com/eliben/pyelftools); the evaluator supports
+an explicit subset and reports unsupported forms of evaluation.
