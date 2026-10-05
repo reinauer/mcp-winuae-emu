@@ -42,6 +42,6 @@ export async function postmortem(gdb: GdbProtocol) {
   const guest_output = await optional('guest_output', async () => JSON.parse(await gdb.sendMonitorCommand('guest-output read')));
   return { format: 'winuae-postmortem-v1', snapshot,
     diagnosis_context: currentFault ? 'fault' : 'current',
-    fault: currentFault ? { vector: last.vector, instruction_pc: instructionPC, registers: faultRegisters } : null,
+    fault: currentFault ? { ...last, instruction_pc: instructionPC, registers: faultRegisters } : null,
     last_exception: exception, disassembly, stack, segments, guest_output, errors };
 }

@@ -296,3 +296,6 @@ lookup is performed. DWARF-aware C inspection remains separate work.
 
 File-format references: [AmigaDOS executable format, chapter 11](https://developer.amigaos3.net/sites/default/files/downloads/2024-10/Amiga_ROM_Kernel_Reference_Manual_DOS.pdf)
 and the [generic ELF ABI](https://gabi.xinuos.com/elf/05-symtab.html).
+
+Postmortem fault context includes target-provided bus/address-fault
+metadata and banked stack pointers when supported by WinUAE.
