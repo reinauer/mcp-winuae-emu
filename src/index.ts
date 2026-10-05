@@ -263,6 +263,12 @@ const tools: Tool[] = [
   ...debugTools,
   ...inputTools,
   ...watchTools,
+  ...[
+    ['winuae_attach','Attach to the configured existing GDB server. Never launch a process. Connecting stops the guest, as with ordinary GDB attach.'],
+    ['winuae_launch','Launch and own a new emulator using configured paths. Fail if already connected, owning a process, or the port is occupied.'],
+    ['winuae_detach','Detach, clear remote controls and debugger state, resume guest execution and leave the emulator running. Relinquish process ownership so MCP exit will not terminate it. Host UI pause remains unchanged.'],
+    ['winuae_shutdown','Stop only an emulator launched and still owned by this MCP server. Refuse attached or detached instances.']
+  ].map(([name,description])=>({name,description,inputSchema:{type:'object' as const,properties:{}}})),
   {
     name: 'winuae_wait_stop',
     description: 'Wait for a stop without interrupting execution. Pause and disconnect remain available. Timeout leaves the CPU running.',
@@ -832,6 +838,20 @@ async function handleToolCall(name: string, args: any): Promise<CallToolResult> 
         const registers = await protocol.readRegisters();
         return { content: [{ type: 'text', text: JSON.stringify({action:args.action,file,stopped:true,registers}) }] };
       }
+      case 'winuae_attach':
+      case 'winuae_launch': {
+        if (!connection) connection = new WinUAEConnection(config);
+        if (name === 'winuae_attach') await connection.connectExisting();
+        else await connection.connect();
+        return { content:[{type:'text',text:JSON.stringify(await connection.status())}] };
+      }
+      case 'winuae_detach':
+      case 'winuae_shutdown': {
+        if (!connection) throw new Error('No session');
+        if (name === 'winuae_detach') await connection.detach();
+        else await connection.shutdown();
+        return { content:[{type:'text',text:JSON.stringify(await connection.status())}] };
+      }
       case 'winuae_connect': {
         if (connection?.connected) {
           return { content: [{ type: 'text', text: 'Already connected to WinUAE' }] };
@@ -853,11 +873,8 @@ async function handleToolCall(name: string, args: any): Promise<CallToolResult> 
       }
 
       case 'winuae_status': {
-        if (!connection?.connected) {
-          return { content: [{ type: 'text', text: 'Not connected' }] };
-        }
-        const healthy = await connection.healthCheck();
-        return { content: [{ type: 'text', text: healthy ? 'Connected and responsive' : 'Connected but not responding' }] };
+        const status = connection ? await connection.status() : {connected:false,owned:false,pid:null,responsive:false,execution:'disconnected'};
+        return { content: [{ type:'text',text:JSON.stringify(status) }] };
       }
 
       case 'winuae_load': {
