@@ -188,3 +188,9 @@ and last captured fault (`status`). Masks are independent of console stops
 and clear on disconnect. Execution stops after exception-frame construction;
 inspect `last.instruction_pc` and the pre-frame register snapshot for fault
 diagnosis, and normal register tools for the current handler-entry state.
+
+`winuae_range_step` uses standard GDB range stepping with inclusive `start`
+and exclusive `end`. It starts asynchronously and remains interruptible,
+including when the guest loops inside the range. Use pause to inspect the
+stop. Equal bounds perform one instruction. The client checks support
+before resuming the target.
