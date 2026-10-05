@@ -194,3 +194,10 @@ and exclusive `end`. It starts asynchronously and remains interruptible,
 including when the guest loops inside the range. Use pause to inspect the
 stop. Equal bounds perform one instruction. The client checks support
 before resuming the target.
+
+`winuae_dma_watchpoint` adds a read, write or access watchpoint with named
+source groups: blitter, copper, disk, audio, bitplane and sprite. CPU accesses
+are excluded. Keep the returned ID for `remove`, or use `list` to inspect
+remote DMA entries. Stops include the actual source mask and custom register.
+These entries are independent of standard GDB CPU watchpoints and are
+removed on disconnect.
