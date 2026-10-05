@@ -220,3 +220,18 @@ rejected. Ordinary reset behavior is unchanged.
 ## License
 
 MIT
+
+### Host-side diagnosis
+
+`winuae_wait_stop` observes execution for up to 60 seconds without stopping
+it. Pause and disconnect remain available while a wait is pending. A
+wait timeout does not interrupt the CPU.
+
+`winuae_snapshot` pauses execution and returns all registers, the stop
+reply and optional `{address, length}` memory ranges (16 ranges, 256 KiB
+combined). `winuae_postmortem` returns a complete bounded JSON report with
+fault and current contexts, disassembly, stack bytes, loaded segments
+and captured guest output. An exception is used as the diagnosis context
+only when its vector and instruction address match the current stop.
+Unavailable optional data appears in `errors`. Neither tool resumes the
+CPU or writes guest memory. Reports describe CPU state, not a disk backup.

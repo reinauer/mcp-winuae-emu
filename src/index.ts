@@ -11,10 +11,12 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   Tool,
+  CallToolResult,
 } from '@modelcontextprotocol/sdk/types.js';
 import { WinUAEConnection, WinUAEConfig } from './winuae-connection.js';
 import { M68kRegisters, WatchpointType } from './gdb-protocol.js';
 import * as path from 'path';
+import { debugTools, handleDebugTool } from './debug-tools.js';
 
 // ─── Configuration from environment ──────────────────────────────────
 
@@ -256,6 +258,7 @@ function isDiskImage(filePath: string): boolean {
 // ─── Tool Definitions ────────────────────────────────────────────────
 
 const tools: Tool[] = [
+  ...debugTools,
   {
     name: 'winuae_wait_stop',
     description: 'Wait for a stop without interrupting execution. Pause and disconnect remain available. Timeout leaves the CPU running.',
@@ -707,8 +710,12 @@ const tools: Tool[] = [
 
 // ─── Tool Implementations ────────────────────────────────────────────
 
-async function handleToolCall(name: string, args: any): Promise<{ content: Array<{ type: string; text?: string }> }> {
+async function handleToolCall(name: string, args: any): Promise<CallToolResult> {
   try {
+    if (debugTools.some(tool => tool.name === name)) {
+      if (!connection?.connected) throw new Error('Not connected to WinUAE');
+      return await handleDebugTool(name, args, connection.getProtocol());
+    }
     switch (name) {
       case 'winuae_wait_stop': {
         if (!connection?.connected) throw new Error('Not connected to WinUAE');
@@ -1171,7 +1178,7 @@ async function handleToolCall(name: string, args: any): Promise<{ content: Array
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    return { content: [{ type: 'text', text: `Error: ${errorMessage}` }] };
+    return { isError: true, content: [{ type: 'text', text: `Error: ${errorMessage}` }] };
   }
 }
 
