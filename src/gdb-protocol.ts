@@ -408,8 +408,9 @@ export class GdbProtocol {
    * Send a GDB monitor command (qRcmd). Used for custom WinUAE commands.
    * Returns the response text, or throws on error.
    */
-  async sendMonitorCommand(cmd: string): Promise<string> {
-    if (this._isRunning) await this.pause();
+  async sendMonitorCommand(cmd: string, live = false): Promise<string> {
+    if (live && !/^(capabilities$|input )/.test(cmd)) throw new Error('Command is not safe during execution');
+    if (!live && this._isRunning) await this.pause();
     const hexCmd = Buffer.from(cmd, 'utf8').toString('hex');
     const reply = await this.sendCommand(`qRcmd,${hexCmd}`, 30000);
     if (reply === 'OK') {

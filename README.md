@@ -357,3 +357,19 @@ section, 64 frames, 4096 bytes per value and 64 KiB of total guest reads.
 Value expansion has depth/member/element limits. DWARF parsing is provided
 by [pyelftools](https://github.com/eliben/pyelftools); the evaluator supports
 an explicit subset and reports unsupported forms of evaluation.
+
+### Guest input
+
+`winuae_input` sends Amiga raw keys, relative mouse motion, mouse/joystick
+buttons and joystick directions through the shared WinUAE input subsystem.
+It leaves the execution state unchanged. Ports 0 and 1 are the physical
+Amiga game ports; mouse and joystick buttons share their hardware lines.
+Mouse deltas are signed hardware counts, not host screen coordinates.
+
+Use explicit `pressed: true/false` pairs, or `action: release` to release
+all remotely held controls. Duplicate state changes are idempotent. Status
+reports only remote input ownership, not physical host device state. Do
+not simultaneously drive the same control from the host and MCP. Reset,
+checkpoint restore and disconnect release remote controls. Input recording
+and playback reject new remote input. A paused guest cannot consume key
+transitions; frame-timed sequences are needed for reliable taps and typing.

@@ -16,6 +16,7 @@ import {
 import { WinUAEConnection, WinUAEConfig } from './winuae-connection.js';
 import { M68kRegisters, WatchpointType } from './gdb-protocol.js';
 import * as path from 'path';
+import { inputTools, handleInputTool } from './input-tools.js';
 import { debugTools, handleDebugTool } from './debug-tools.js';
 
 // ─── Configuration from environment ──────────────────────────────────
@@ -259,6 +260,7 @@ function isDiskImage(filePath: string): boolean {
 
 const tools: Tool[] = [
   ...debugTools,
+  ...inputTools,
   {
     name: 'winuae_wait_stop',
     description: 'Wait for a stop without interrupting execution. Pause and disconnect remain available. Timeout leaves the CPU running.',
@@ -712,6 +714,8 @@ const tools: Tool[] = [
 
 async function handleToolCall(name: string, args: any): Promise<CallToolResult> {
   try {
+    if (inputTools.some(tool => tool.name === name))
+      return await handleInputTool(name, args, connection?.connected ? connection.getProtocol() : undefined);
     if (debugTools.some(tool => tool.name === name)) {
       return await handleDebugTool(name, args, connection?.connected ? connection.getProtocol() : undefined);
     }
