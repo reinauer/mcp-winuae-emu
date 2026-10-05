@@ -1,5 +1,6 @@
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { GdbProtocol } from './gdb-protocol.js';
+import { capabilities, requireCommand } from './target-info.js';
 import { listSymbols, readSymbol } from './symbols.js';
 import { parseHunk, loadHunks } from './amiga-hunk.js';
 import { boundedFile } from './debug-validation.js';
@@ -8,6 +9,8 @@ import { searchMemory } from './memory-search.js';
 import { captureSnapshot, postmortem } from './diagnostics.js';
 
 export const debugTools: Tool[] = [
+  { name: 'winuae_capabilities', description: 'Discover target commands, CPU/MMU models, execution controls and address semantics. Queries the current configuration; leaves execution paused.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'winuae_memory_map', description: 'Report the existing debugger memory map with RAM/ROM/I/O and chip-memory classification. A truncated map is explicitly marked. Map membership does not reserve guest memory.', inputSchema: { type: 'object', properties: {} } },
   { name: 'winuae_symbols', description: 'List bounded Hunk or ELF32 big-endian m68k symbols and section metadata from a host file. Includes a file hash; does not infer runtime relocation or C types.',
     inputSchema: { type: 'object', properties: { file: { type: 'string' }, prefix: { type: 'string', maxLength: 1024 }, limit: { type: 'integer', minimum: 1, maximum: 1024 } }, required: ['file'] } },
   { name: 'winuae_symbol_read', description: 'Read an exact symbol using loaded DOS segments or explicit section mappings. Hunk indices map to segment indices; ELF requires explicit mappings. Format and offsets are caller-supplied, not DWARF-inferred. Bytes require length; scalars use count. Leaves execution paused.',
@@ -55,6 +58,8 @@ export async function handleDebugTool(name: string, args: Record<string, unknown
   };
   let result: unknown;
   switch (name) {
+    case 'winuae_capabilities': result = await capabilities(target()); break;
+    case 'winuae_memory_map': await requireCommand(target(), 'memory-map'); result = JSON.parse(await target().sendMonitorCommand('memory-map')); break;
     case 'winuae_symbols': result = await listSymbols(args); break;
     case 'winuae_symbol_read': result = await readSymbol(target(), args); break;
     case 'winuae_hunk_inspect': {

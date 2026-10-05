@@ -1,6 +1,7 @@
 // Amiga ROM Kernel Reference Manual: DOS, executable file format (chapter 11).
 // Deliberately excludes overlays, external references and relative relocations.
 import type { GdbProtocol } from './gdb-protocol.js';
+import { requireCommand } from './target-info.js';
 import { integer, range } from './debug-validation.js';
 
 export interface Hunk {
@@ -108,6 +109,12 @@ export function relocateHunks(hunks: Hunk[], supplied: unknown) {
 
 export async function loadHunks(gdb: GdbProtocol, hunks: Hunk[], placements: unknown) {
   const { regions, images } = relocateHunks(hunks, placements);
+  await requireCommand(gdb, 'memory-check');
+  for (let i = 0; i < hunks.length; i++) if (images[i].length) {
+    const check = JSON.parse(await gdb.sendMonitorCommand(`memory-check ${regions[i].address.toString(16)} ${images[i].length.toString(16)}`));
+    const claimed = (placements as { memory: string }[])[i].memory;
+    if (check.writable_ram !== true || check.memory !== claimed) throw new Error(`Hunk ${i} placement disagrees with target RAM type`);
+  }
   await gdb.pause();
   const backups: Buffer[] = [];
   for (let i = 0; i < hunks.length; i++) backups.push(images[i].length ? await gdb.readMemory(regions[i].address, images[i].length) : Buffer.alloc(0));

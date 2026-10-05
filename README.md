@@ -299,3 +299,11 @@ and the [generic ELF ABI](https://gabi.xinuos.com/elf/05-symtab.html).
 
 Postmortem fault context includes target-provided bus/address-fault
 metadata and banked stack pointers when supported by WinUAE.
+
+`winuae_capabilities` queries the current target's available commands,
+CPU/MMU models and address semantics. `winuae_memory_map` exposes the
+existing debugger map with RAM/ROM/I/O and chip-memory classification;
+it explicitly reports truncation. Hunk loading now requires target
+`memory-check` support and validates every placement's writable RAM and
+memory kind before the first write. These checks do not allocate RAM or
+establish that the application owns it.
