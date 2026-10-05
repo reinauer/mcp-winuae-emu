@@ -1,5 +1,6 @@
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { GdbProtocol } from './gdb-protocol.js';
+import { listSymbols, readSymbol } from './symbols.js';
 import { parseHunk, loadHunks } from './amiga-hunk.js';
 import { boundedFile } from './debug-validation.js';
 import { readBitmap } from './bitmap.js';
@@ -7,6 +8,19 @@ import { searchMemory } from './memory-search.js';
 import { captureSnapshot, postmortem } from './diagnostics.js';
 
 export const debugTools: Tool[] = [
+  { name: 'winuae_symbols', description: 'List bounded Hunk or ELF32 big-endian m68k symbols and section metadata from a host file. Includes a file hash; does not infer runtime relocation or C types.',
+    inputSchema: { type: 'object', properties: { file: { type: 'string' }, prefix: { type: 'string', maxLength: 1024 }, limit: { type: 'integer', minimum: 1, maximum: 1024 } }, required: ['file'] } },
+  { name: 'winuae_symbol_read', description: 'Read an exact symbol using loaded DOS segments or explicit section mappings. Hunk indices map to segment indices; ELF requires explicit mappings. Format and offsets are caller-supplied, not DWARF-inferred. Bytes require length; scalars use count. Leaves execution paused.',
+    inputSchema: { type: 'object', properties: {
+      file: { type: 'string' }, symbol: { type: 'string', maxLength: 1024 }, section: { type: 'integer', description: 'Disambiguate duplicate names by section index' },
+      process: { type: ['string', 'integer'] }, offset: { type: 'integer', minimum: 0 },
+      format: { type: 'string', enum: ['bytes', 'u8', 's8', 'u16', 's16', 'u32', 's32'], default: 'bytes' },
+      length: { type: 'integer', minimum: 1, maximum: 4096 }, count: { type: 'integer', minimum: 1, maximum: 256 },
+      mappings: { type: 'array', maxItems: 256, items: { type: 'object', properties: {
+        section: { type: ['integer', 'string'] }, segment: { type: 'integer', minimum: 0, maximum: 255 },
+        address: { type: ['integer', 'string'] }, size: { type: 'integer', minimum: 0 }, offset: { type: 'integer', minimum: 0 }
+      }, required: ['section'] }, description: 'Map section index/name to a loaded segment index plus optional offset, or explicit address and size' }
+    }, required: ['file', 'symbol'] } },
   { name: 'winuae_hunk_inspect', description: 'Validate a Hunk executable and list its segments, memory requirements and first 1024 symbols. Does not load or execute the program. Rejects unsupported records and oversized allocations.',
     inputSchema: { type: 'object', properties: { file: { type: 'string' } }, required: ['file'] } },
   { name: 'winuae_hunk_load', description: 'Relocate CODE/DATA/BSS hunks into explicitly reserved guest RAM. Supply one placement per hunk with address, capacity and chip/fast memory kind. Initializes BSS and padding, verifies writes and attempts rollback on failure. Does not allocate AmigaDOS memory, create a process, set PC or run it. Caller must own the RAM and identify its kind correctly.',
@@ -34,24 +48,30 @@ export const debugTools: Tool[] = [
   { name: 'winuae_postmortem', description: 'Capture a bounded crash report: fault-time and current registers, instruction disassembly, stack bytes, loaded segments and guest output. Uses fault context only when it matches the current exception stop. Leaves execution paused; optional unavailable data is reported explicitly.',
     inputSchema: { type: 'object', properties: {} } },
 ];
-export async function handleDebugTool(name: string, args: Record<string, unknown>, gdb: GdbProtocol): Promise<CallToolResult> {
+export async function handleDebugTool(name: string, args: Record<string, unknown>, gdb?: GdbProtocol): Promise<CallToolResult> {
+  const target = () => {
+    if (!gdb?.connected) throw new Error('Not connected to WinUAE');
+    return gdb;
+  };
   let result: unknown;
   switch (name) {
+    case 'winuae_symbols': result = await listSymbols(args); break;
+    case 'winuae_symbol_read': result = await readSymbol(target(), args); break;
     case 'winuae_hunk_inspect': {
       const hunks = parseHunk(await boundedFile(args.file));
       const symbols = hunks.flatMap(h => h.symbols.map(s => ({ ...s, hunk: h.index })));
       result = { hunks: hunks.map(({ data, relocations, symbols, ...h }) => ({ ...h, payload_size: data.length, relocations: relocations.length, symbols: symbols.length })),
         symbols: symbols.slice(0, 1024), symbols_truncated: symbols.length > 1024 }; break;
     }
-    case 'winuae_hunk_load': result = await loadHunks(gdb, parseHunk(await boundedFile(args.file)), args.placements); break;
+    case 'winuae_hunk_load': result = await loadHunks(target(), parseHunk(await boundedFile(args.file)), args.placements); break;
     case 'winuae_bitmap': {
-      const bitmap = await readBitmap(gdb, args);
+      const bitmap = await readBitmap(target(), args);
       return { content: [{ type: 'text', text: JSON.stringify({ width: bitmap.width, height: bitmap.height }) },
         { type: 'image', mimeType: 'image/png', data: bitmap.png.toString('base64') }] };
     }
-    case 'winuae_memory_search': result = await searchMemory(gdb, args); break;
-    case 'winuae_snapshot': result = await captureSnapshot(gdb, args.ranges); break;
-    case 'winuae_postmortem': result = await postmortem(gdb); break;
+    case 'winuae_memory_search': result = await searchMemory(target(), args); break;
+    case 'winuae_snapshot': result = await captureSnapshot(target(), args.ranges); break;
+    case 'winuae_postmortem': result = await postmortem(target()); break;
     default: throw new Error(`Unknown debug tool: ${name}`);
   }
   return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };

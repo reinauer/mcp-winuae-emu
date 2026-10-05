@@ -713,8 +713,7 @@ const tools: Tool[] = [
 async function handleToolCall(name: string, args: any): Promise<CallToolResult> {
   try {
     if (debugTools.some(tool => tool.name === name)) {
-      if (!connection?.connected) throw new Error('Not connected to WinUAE');
-      return await handleDebugTool(name, args, connection.getProtocol());
+      return await handleDebugTool(name, args, connection?.connected ? connection.getProtocol() : undefined);
     }
     switch (name) {
       case 'winuae_wait_stop': {

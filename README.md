@@ -271,3 +271,28 @@ error explicitly identifies possibly modified hunks. Use normal
 AmigaDOS loading plus process-entry breakpoints for OS applications.
 The raw `winuae_load` tool now rejects Hunk files instead of copying
 their headers into executable memory.
+
+`winuae_symbols` lists Hunk and ELF32 big-endian m68k symbols, section
+metadata and the input file's SHA-256. It and `winuae_hunk_inspect` work
+without an emulator connection. Symbol output is bounded and supports
+prefix filtering.
+
+`winuae_symbol_read` reads an exact symbol name. Hunk indices correspond
+to loaded DOS segment indices. ELF requires an explicit `mappings`
+entry, such as `{section: ".data", segment: 1, offset: 0}`; ELF sections
+are not assumed to have the same order as DOS hunks. Alternatively use
+`{section: 1, address: "0x20000", size: 4096}` for an explicitly known
+region. `process` optionally selects the DOS process. Mapping offsets
+locate sections within a segment. Use the matching executable/debug
+file; a symbol table alone cannot establish the running binary's identity.
+
+Byte reads require `length`. Explicit `u8`, `s8`, `u16`, `s16`, `u32` or
+`s32` formats use `count` (default 1) and big-endian decoding. `offset`
+is a caller-supplied byte offset, and `section` disambiguates duplicate
+names. Reads are bounded by the symbol size when known, section size,
+mapped segment size and a 4096-byte response limit. No default 32-byte
+read, guessed C layout, DWARF expression evaluation or automatic member
+lookup is performed. DWARF-aware C inspection remains separate work.
+
+File-format references: [AmigaDOS executable format, chapter 11](https://developer.amigaos3.net/sites/default/files/downloads/2024-10/Amiga_ROM_Kernel_Reference_Manual_DOS.pdf)
+and the [generic ELF ABI](https://gabi.xinuos.com/elf/05-symtab.html).
