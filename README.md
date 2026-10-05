@@ -235,3 +235,10 @@ and captured guest output. An exception is used as the diagnosis context
 only when its vector and instruction address match the current stop.
 Unavailable optional data appears in `errors`. Neither tool resumes the
 CPU or writes guest memory. Reports describe CPU state, not a disk backup.
+
+`winuae_memory_search` searches an explicit address range (up to 16 MiB)
+for hex bytes. It handles overlapping matches and reads across chunk
+boundaries. `max_matches` bounds the response; `next_address` and
+`remaining` allow continuation when `limit_reached` is true. Alignment
+uses absolute guest addresses. Unreadable memory is an error, not a hole
+silently skipped by the search.
