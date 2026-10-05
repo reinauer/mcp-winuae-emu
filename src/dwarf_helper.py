@@ -33,7 +33,10 @@ class Analysis:
             raise ValueError('Compressed debug sections are unsupported')
         if any(s.name.startswith('.debug') and s['sh_size'] > 4 * 1024 * 1024 for s in self.elf.iter_sections()):
             raise ValueError('Debug section exceeds 4 MiB')
-        self.dwarf = self.elf.get_dwarf_info()
+        # ET_EXEC debug addresses are already linked, including files built
+        # with --emit-relocs. Applying their retained relocations again is
+        # incorrect and pyelftools does not implement m68k relocations.
+        self.dwarf = self.elf.get_dwarf_info(relocate_dwarf_sections=False)
         self.expr_parser = DWARFExprParser(self.dwarf.structs)
         self.locations = LocationParser(self.dwarf.location_lists())
         self.maps = request['mappings']
