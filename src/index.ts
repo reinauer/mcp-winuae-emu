@@ -301,6 +301,22 @@ const tools: Tool[] = [
       required: ['start', 'end'],
     },
   },
+  {
+    name: 'winuae_dma_watchpoint',
+    description: 'Add, list or remove remotely owned DMA watchpoints. Filter accesses by hardware source; CPU accesses do not match. Stop replies identify the actual source and custom register.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'list', 'remove'] },
+        address: { type: ['string', 'number'] },
+        length: { type: 'integer', minimum: 1, maximum: 65536 },
+        mode: { type: 'string', enum: ['read', 'write', 'access'] },
+        sources: { type: 'array', items: { type: 'string', enum: ['blitter', 'copper', 'disk', 'audio', 'bitplane', 'sprite'] } },
+        id: { type: 'integer', minimum: 0, maximum: 19, description: 'ID returned by add, required for remove' },
+      },
+      required: ['action'],
+    },
+  },
   // Connection tools
   {
     name: 'winuae_connect',
@@ -726,6 +742,33 @@ async function handleToolCall(name: string, args: any): Promise<{ content: Array
         if (!connection?.connected) throw new Error('Not connected to WinUAE');
         await connection.getProtocol().rangeStep(parseHexOrDecimal(args.start), parseHexOrDecimal(args.end));
         return { content: [{ type: 'text', text: 'Range stepping started. Use pause to inspect the stop.' }] };
+      }
+      case 'winuae_dma_watchpoint': {
+        if (!connection?.connected) throw new Error('Not connected to WinUAE');
+        const protocol = connection.getProtocol();
+        if (args.action === 'add') {
+          const address = parseHexOrDecimal(args.address);
+          const length = args.length;
+          const modes: Record<string, number> = { read: 1, write: 2, access: 3 };
+          const sources: Record<string, number> = { blitter: 0x1f8, copper: 0x200, disk: 0x400, audio: 0x7800, bitplane: 0x7f8000, sprite: 0x7f800000 };
+          if (!Number.isInteger(address) || address < 0 || !Number.isInteger(length) || length < 1 ||
+              length > 65536 || address + length > 0x7fff0000 || !Object.hasOwn(modes, args.mode) ||
+              !Array.isArray(args.sources) || !args.sources.length || args.sources.length > 6 ||
+              args.sources.some((source: unknown) => typeof source !== 'string' || !Object.hasOwn(sources, source))) {
+            throw new Error('Supply a valid range, access mode and one or more DMA source groups');
+          }
+          let mask = 0;
+          for (const source of args.sources) mask |= sources[source];
+          const id = await protocol.sendMonitorCommand(`dma-watch add ${address.toString(16)} ${length.toString(16)} ${modes[args.mode]} ${mask.toString(16)}`);
+          return { content: [{ type: 'text', text: JSON.stringify({id:Number(id)}) }] };
+        }
+        if (args.action === 'remove') {
+          if (!Number.isInteger(args.id) || args.id < 0 || args.id >= 20) throw new Error('Invalid DMA watchpoint ID');
+          await protocol.sendMonitorCommand(`dma-watch remove ${args.id.toString(16)}`);
+        } else if (args.action !== 'list') {
+          throw new Error('Action must be add, list or remove');
+        }
+        return { content: [{ type: 'text', text: await protocol.sendMonitorCommand('dma-watch list') }] };
       }
       case 'winuae_connect': {
         if (connection?.connected) {
