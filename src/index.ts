@@ -326,6 +326,18 @@ const tools: Tool[] = [
       required: ['action'],
     },
   },
+  {
+    name: 'winuae_checkpoint',
+    description: 'Save or restore a stopped WinUAE debugging checkpoint at a host path. Restore retains the connection and leaves the CPU stopped, but clears remote breakpoints, watchpoints, exception selection and captured output. External disk/file writes are not rolled back; normal WinUAE savestate limitations apply.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['save', 'restore'] },
+        file: { type: 'string', description: 'Host path to a WinUAE state file; save replaces an existing file' },
+      },
+      required: ['action', 'file'],
+    },
+  },
   // Connection tools
   {
     name: 'winuae_connect',
@@ -783,6 +795,18 @@ async function handleToolCall(name: string, args: any): Promise<{ content: Array
         if (!connection?.connected) throw new Error('Not connected to WinUAE');
         if (!['on', 'off', 'read', 'clear'].includes(args.action)) throw new Error('Action must be on, off, read or clear');
         return { content: [{ type: 'text', text: await connection.getProtocol().sendMonitorCommand(`guest-output ${args.action}`) }] };
+      }
+      case 'winuae_checkpoint': {
+        if (!connection?.connected) throw new Error('Not connected to WinUAE');
+        if (!['save', 'restore'].includes(args.action) || typeof args.file !== 'string' ||
+            !args.file.length || /[\x00\r\n]/.test(args.file)) throw new Error('Supply save or restore and a valid host file path');
+        const { resolve } = await import('path');
+        const file = resolve(args.file);
+        if (Buffer.byteLength(file, 'utf8') > 900) throw new Error('Checkpoint path is too long');
+        const protocol = connection.getProtocol();
+        await protocol.sendMonitorCommand(`checkpoint ${args.action} ${file}`);
+        const registers = await protocol.readRegisters();
+        return { content: [{ type: 'text', text: JSON.stringify({action:args.action,file,stopped:true,registers}) }] };
       }
       case 'winuae_connect': {
         if (connection?.connected) {

@@ -153,22 +153,7 @@ command-line overrides. It does not modify the configuration file.
 - [vscode-amiga-debug](https://github.com/BartmanAbyss/vscode-amiga-debug) by BartmanAbyss -- the VSCode extension that pioneered Amiga GDB debugging, and the reference for this work
 - [Model Context Protocol](https://modelcontextprotocol.io/) by Anthropic
 
-## Limitations
-
-- Requires a WinUAE build containing the optional GDB server.
-- Binary loading copies bytes into RAM; it does not relocate or execute
-  Amiga Hunk files.
-- CPU/DMA profiling and the debug overlay are not exposed.
-- Memory addresses are physical; ROM writes and arbitrary I/O access fail.
-- Watchpoints cover CPU data accesses, not DMA, and follow the emulator's
-  documented range and MMU-debugger restrictions.
-- The GDB server accepts one local client at a time.
-
-## License
-
-MIT
-
-### AmigaDOS program entry
+## WinUAE debug branch extensions
 
 `winuae_process_breakpoint` sets, inspects or clears a one-shot entry stop.
 Select a printable ASCII process/CLI command `name` or a Process `address`,
@@ -209,3 +194,29 @@ truncation/eviction counters make data loss visible. Reads are nondestructive;
 `off` retains records and `clear` preserves the enable setting. Disconnect
 and reset disable and clear capture. This does not capture guest console or
 serial output, and does not alter the emulator's host logging.
+
+`winuae_checkpoint` saves or restores a standard WinUAE state file at `file`.
+Save replaces an existing file. Restore replies after completion, keeps the
+connection, and leaves the CPU stopped at the restored state. Remote entry
+and CPU breakpoints, watchpoints, exception selection and guest-output
+capture are cleared; re-arm them after inspecting the restored registers.
+External disk/file changes are not rolled back. Normal WinUAE savestate
+limitations apply, including completing an active blit when saving. Busy
+host filesystems, incompatible devices and input recording/playback are
+rejected. Ordinary reset behavior is unchanged.
+
+## Limitations
+
+- Requires a WinUAE build containing the optional GDB server.
+- Binary loading copies bytes into RAM; it does not relocate or execute
+  Amiga Hunk files.
+- CPU/DMA profiling and the debug overlay are not exposed.
+- Memory addresses are physical; ROM writes and arbitrary I/O access fail.
+- Standard GDB watchpoints cover CPU data accesses; the DMA tool selects
+  hardware sources. Both follow the emulator's documented range and
+  MMU-debugger restrictions.
+- The GDB server accepts one local client at a time.
+
+## License
+
+MIT
