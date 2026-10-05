@@ -317,6 +317,15 @@ const tools: Tool[] = [
       required: ['action'],
     },
   },
+  {
+    name: 'winuae_guest_output',
+    description: 'Enable, disable, read or clear bounded guest diagnostics from uaelib function 86. Reads preserve records and include IDs, truncation and eviction counts. This channel does not capture AmigaDOS console or serial output.',
+    inputSchema: {
+      type: 'object',
+      properties: { action: { type: 'string', enum: ['on', 'off', 'read', 'clear'] } },
+      required: ['action'],
+    },
+  },
   // Connection tools
   {
     name: 'winuae_connect',
@@ -769,6 +778,11 @@ async function handleToolCall(name: string, args: any): Promise<{ content: Array
           throw new Error('Action must be add, list or remove');
         }
         return { content: [{ type: 'text', text: await protocol.sendMonitorCommand('dma-watch list') }] };
+      }
+      case 'winuae_guest_output': {
+        if (!connection?.connected) throw new Error('Not connected to WinUAE');
+        if (!['on', 'off', 'read', 'clear'].includes(args.action)) throw new Error('Action must be on, off, read or clear');
+        return { content: [{ type: 'text', text: await connection.getProtocol().sendMonitorCommand(`guest-output ${args.action}`) }] };
       }
       case 'winuae_connect': {
         if (connection?.connected) {
