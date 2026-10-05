@@ -269,6 +269,14 @@ const tools: Tool[] = [
       required: ['action'],
     },
   },
+  {
+    name: 'winuae_loaded_segments',
+    description: 'Inspect loaded AmigaDOS segments for the current or selected Process. Returns load-order indexes, guest payload addresses and allocated sizes for relocating host hunk symbols. Corrupt or unavailable process metadata reports an error.',
+    inputSchema: {
+      type: 'object',
+      properties: { address: { type: ['string', 'number'], description: 'Optional Process address; defaults to the current task' } },
+    },
+  },
   // Connection tools
   {
     name: 'winuae_connect',
@@ -659,6 +667,18 @@ async function handleToolCall(name: string, args: any): Promise<{ content: Array
           throw new Error('Action must be set, status or clear');
         }
         return { content: [{ type: 'text', text: await protocol.sendMonitorCommand('process-break status') }] };
+      }
+      case 'winuae_loaded_segments': {
+        if (!connection?.connected) throw new Error('Not connected to WinUAE');
+        let command = 'segments';
+        if (args.address !== undefined) {
+          const address = parseHexOrDecimal(args.address);
+          if (!Number.isInteger(address) || address <= 0 || address > 0xffffffff || address % 4) {
+            throw new Error('Process address must be a nonzero aligned 32-bit address');
+          }
+          command += ` ${address.toString(16)}`;
+        }
+        return { content: [{ type: 'text', text: await connection.getProtocol().sendMonitorCommand(command) }] };
       }
       case 'winuae_connect': {
         if (connection?.connected) {

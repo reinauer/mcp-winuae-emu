@@ -174,3 +174,10 @@ MIT
 Select a printable ASCII process/CLI command `name` or a Process `address`,
 then continue execution and launch the program in the guest. This uses the
 portable WinUAE debug branch and does not change console breakpoints.
+
+`winuae_loaded_segments` returns current or selected AmigaDOS Process metadata
+and loaded segment addresses in load order. Relocate a symbol's hunk-relative
+offset by adding the corresponding segment address. Sizes describe allocated
+payload bounds, including any padding; they are not exact code lengths.
+The emulator validates bounded CLI and Workbench lists and rejects corrupt
+metadata. It does not load host symbol files into the emulation core.
