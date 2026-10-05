@@ -8,9 +8,10 @@
     "mcp-winuae-emu": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-runtime.mjs",
     "watch": "tsc --watch",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "setup:dwarf": "node scripts/setup-dwarf.mjs"
   },
   "keywords": [
     "mcp",
@@ -43,6 +44,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "requirements-dwarf.txt",
+    "scripts/setup-dwarf.mjs"
   ]
 }

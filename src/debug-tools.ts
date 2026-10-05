@@ -1,5 +1,6 @@
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { GdbProtocol } from './gdb-protocol.js';
+import { dwarfTool } from './dwarf.js';
 import { capabilities, requireCommand } from './target-info.js';
 import { listSymbols, readSymbol } from './symbols.js';
 import { parseHunk, loadHunks } from './amiga-hunk.js';
@@ -10,7 +11,18 @@ import { captureSnapshot, postmortem } from './diagnostics.js';
 
 const conditionRegisters = [...Array.from({length:8}, (_,i)=>`D${i}`), ...Array.from({length:8}, (_,i)=>`A${i}`), 'PC', 'USP', 'MSP', 'ISP', 'VBR', 'SR'];
 const conditionOperators = ['eq', 'ne', 'le', 'ge', 'lt', 'gt'];
+const dwarfProperties = {
+  file: { type: 'string', description: 'Linked ELF32 m68k executable with DWARF; must match the guest program' },
+  context: { type: 'string', enum: ['current', 'fault'], default: 'current' }, process: { type: ['string','integer'] },
+  mappings: { type: 'array', minItems: 1, maxItems: 256, items: { type: 'object', properties: {
+    section: { type: ['string','integer'] }, segment: { type: 'integer', minimum: 0, maximum: 255 },
+    address: { type: ['string','integer'] }, size: { type: 'integer', minimum: 0 }, offset: { type: 'integer', minimum: 0 }
+  }, required: ['section'] }, description: 'Explicit section-to-segment mapping, or section address and size' }
+};
 export const debugTools: Tool[] = [
+  { name: 'winuae_source', description: 'Resolve a runtime PC to source file/line and function using linked m68k DWARF and explicit runtime section mappings. Requires Python with pyelftools==0.32. Leaves execution paused.', inputSchema: { type: 'object', properties: { ...dwarfProperties, address: { type: ['string','integer'] } }, required: ['file','mappings'] } },
+  { name: 'winuae_variable', description: 'Read a typed DWARF variable in the current or matching fault scope. Supports .member, ->member and bounded [index] selectors. Uses declared member offsets and element sizes. Unsupported locations, optimized-out variables and ambiguous names are errors; guest code is never executed. Requires Python with pyelftools==0.32 and MMU disabled.', inputSchema: { type: 'object', properties: { ...dwarfProperties, expression: { type: 'string', maxLength: 256 } }, required: ['file','mappings','expression'] } },
+  { name: 'winuae_backtrace', description: 'Unwind up to 64 frames using m68k DWARF call-frame information and symbolize source locations. Stops explicitly on missing or unsupported unwind information; does not guess returns from stack contents. Requires Python with pyelftools==0.32 and MMU disabled.', inputSchema: { type: 'object', properties: { ...dwarfProperties, max_frames: { type: 'integer', minimum: 1, maximum: 64, default: 32 } }, required: ['file','mappings'] } },
   { name: 'winuae_tasks', description: 'Read bounded Exec current, ready and waiting task lists, names, saved stack pointers and stack bounds. Does not claim a suspended task has the current CPU registers.', inputSchema: { type: 'object', properties: {} } },
   { name: 'winuae_history', description: 'Read the existing debugger PC history, or enable/disable instruction recording for remote execution. Recording is opt-in and slows execution. Entries are chronological and adjacent identical PCs may be coalesced by the debugger.', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['read','on','off'], default: 'read' }, count: { type: 'integer', minimum: 1, maximum: 128, default: 32 } } } },
   { name: 'winuae_step_over', description: 'Resume until the next sequential instruction address, using the existing debugger step-over machinery. Returns immediately; use wait_stop or pause. Branches that never reach that address require interruption.', inputSchema: { type: 'object', properties: {} } },
@@ -58,8 +70,8 @@ export const debugTools: Tool[] = [
     inputSchema: { type: 'object', properties: { ranges: { type: 'array', maxItems: 16, items: {
       type: 'object', properties: { address: { type: ['string', 'integer'] }, length: { type: 'integer', minimum: 1, maximum: 262144 } }, required: ['address', 'length']
     } } } } },
-  { name: 'winuae_postmortem', description: 'Capture a bounded crash report: fault-time and current registers, instruction disassembly, stack bytes, loaded segments and guest output. Uses fault context only when it matches the current exception stop. Leaves execution paused; optional unavailable data is reported explicitly.',
-    inputSchema: { type: 'object', properties: {} } },
+  { name: 'winuae_postmortem', description: 'Capture a bounded crash report: fault-time and current registers, instruction disassembly, stack bytes, loaded segments and guest output. Uses fault context only when it matches the current exception stop. Leaves execution paused; optional unavailable data is reported explicitly. Supply an ELF file and mappings to include a DWARF backtrace.',
+    inputSchema: { type: 'object', properties: { ...dwarfProperties, max_frames: { type: 'integer', minimum: 1, maximum: 64, default: 32 } } } },
 ];
 export async function handleDebugTool(name: string, args: Record<string, unknown>, gdb?: GdbProtocol): Promise<CallToolResult> {
   const target = () => {
@@ -68,6 +80,9 @@ export async function handleDebugTool(name: string, args: Record<string, unknown
   };
   let result: unknown;
   switch (name) {
+    case 'winuae_source': result = await dwarfTool(target(), 'source', args); break;
+    case 'winuae_variable': result = await dwarfTool(target(), 'variable', args); break;
+    case 'winuae_backtrace': result = await dwarfTool(target(), 'backtrace', args); break;
     case 'winuae_tasks': await requireCommand(target(), 'tasks'); result = JSON.parse(await target().sendMonitorCommand('tasks')); break;
     case 'winuae_history': {
       const action = args.action ?? 'read', count = integer(args.count ?? 32, 'count', 128, 1);
@@ -107,7 +122,14 @@ export async function handleDebugTool(name: string, args: Record<string, unknown
     }
     case 'winuae_memory_search': result = await searchMemory(target(), args); break;
     case 'winuae_snapshot': result = await captureSnapshot(target(), args.ranges); break;
-    case 'winuae_postmortem': result = await postmortem(target()); break;
+    case 'winuae_postmortem': {
+      const report = await postmortem(target());
+      if (args.file === undefined) { result = report; break; }
+      let backtrace = null;
+      try { backtrace = await dwarfTool(target(), 'backtrace', { ...args, context: report.diagnosis_context }); }
+      catch (e) { report.errors.backtrace = e instanceof Error ? e.message : String(e); }
+      result = { ...report, backtrace }; break;
+    }
     default: throw new Error(`Unknown debug tool: ${name}`);
   }
   return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
