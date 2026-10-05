@@ -257,6 +257,13 @@ function isDiskImage(filePath: string): boolean {
 
 const tools: Tool[] = [
   {
+    name: 'winuae_wait_stop',
+    description: 'Wait for a stop without interrupting execution. Pause and disconnect remain available. Timeout leaves the CPU running.',
+    inputSchema: { type: 'object', properties: {
+      timeout_ms: { type: 'integer', minimum: 1, maximum: 60000, default: 30000 }
+    } }
+  },
+  {
     name: 'winuae_process_breakpoint',
     description: 'Arm a one-shot stop at an AmigaDOS program entry, or inspect/clear it. Does not launch the program. Names match case-insensitively; bare names match the basename. Continue execution after arming.',
     inputSchema: {
@@ -703,6 +710,10 @@ const tools: Tool[] = [
 async function handleToolCall(name: string, args: any): Promise<{ content: Array<{ type: string; text?: string }> }> {
   try {
     switch (name) {
+      case 'winuae_wait_stop': {
+        if (!connection?.connected) throw new Error('Not connected to WinUAE');
+        return { content: [{ type: 'text', text: await connection.getProtocol().waitForStop(args.timeout_ms ?? 30000) }] };
+      }
       case 'winuae_process_breakpoint': {
         if (!connection?.connected) throw new Error('Not connected to WinUAE');
         const protocol = connection.getProtocol();
@@ -1186,6 +1197,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 let toolQueue: Promise<unknown> = Promise.resolve();
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  // Observation sends no RSP commands and must not block a queued pause.
+  if (name === 'winuae_wait_stop') return handleToolCall(name, args || {});
   const result = toolQueue.then(() => handleToolCall(name, args || {}));
   toolQueue = result.catch(() => undefined);
   return result;

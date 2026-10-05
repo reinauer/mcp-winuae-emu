@@ -16,7 +16,7 @@ export interface M68kRegisters {
 
 export type WatchpointType = 'write' | 'read' | 'access';
 
-const REGISTER_NAMES: (keyof M68kRegisters)[] = [
+export const REGISTER_NAMES: (keyof M68kRegisters)[] = [
   'D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7',
   'A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7',
   'SR', 'PC',
@@ -33,6 +33,7 @@ export class GdbProtocol {
   private receiveBuffer = '';
   private noAckMode = false;
   private packetResolvers: Array<{
+    stop: boolean;
     resolve: (data: string) => void;
     reject: (error: Error) => void;
     timer: ReturnType<typeof setTimeout>;
@@ -41,6 +42,28 @@ export class GdbProtocol {
   private pendingData = '';
   private _isRunning = false;
   private pendingStopReply: string | null = null;
+  private stopWaiters = new Set<{
+    resolve: (reply: string) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+
+  get lastStopReply(): string | null { return this.pendingStopReply; }
+
+  /** Observe execution without claiming a command reply or interrupting it. */
+  waitForStop(timeoutMs = 30000): Promise<string> {
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000)
+      return Promise.reject(new Error('Stop timeout must be 1-60000 ms'));
+    if (!this.connected) return Promise.reject(new Error('Disconnected'));
+    if (!this._isRunning) return Promise.resolve(this.pendingStopReply ?? 'S00');
+    return new Promise((resolve, reject) => {
+      const waiter = { resolve, reject, timer: setTimeout(() => {
+        this.stopWaiters.delete(waiter);
+        reject(new Error('Stop wait timed out; execution was not interrupted'));
+      }, timeoutMs) };
+      this.stopWaiters.add(waiter);
+    });
+  }
 
   /**
    * Connect to GDB server and perform handshake
@@ -168,25 +191,26 @@ export class GdbProtocol {
         continue;
       }
 
-      // Async stop replies (S/T packets) when CPU was running with no resolver waiting
-      if ((packetData.startsWith('S') || packetData.startsWith('T')) && this.packetResolvers.length === 0) {
+      const isStop = /^(?:S[0-9a-fA-F]{2}$|T[0-9a-fA-F]{2})/.test(packetData);
+      if (isStop) {
         this.pendingStopReply = packetData;
         this._isRunning = false;
-        this.debug(`[GDB] Async stop reply: ${packetData}`);
-        continue;
-      }
-
-      // Deliver to waiting resolver
-      const resolver = this.packetResolvers.shift();
-      if (resolver) {
-        clearTimeout(resolver.timer);
-        // Track stop for run commands
-        if (packetData.startsWith('S') || packetData.startsWith('T')) {
-          this._isRunning = false;
+        for (const waiter of this.stopWaiters) {
+          clearTimeout(waiter.timer);
+          waiter.resolve(packetData);
         }
-        resolver.resolve(packetData);
-      } else {
-        this.debug(`[GDB] Unsolicited packet: ${packetData.slice(0, 50)}`);
+        this.stopWaiters.clear();
+      }
+      // A stop cannot consume a register/monitor reply. Observers never enter
+      // this queue, so an ordinary reply cannot satisfy a stop wait either.
+      const index = this.packetResolvers.findIndex(r => r.stop === isStop);
+      const fallback = !isStop && /^E[0-9a-fA-F]{2}$/.test(packetData) ? 0 : -1;
+      const selected = index >= 0 ? index : fallback;
+      if (selected >= 0 && this.packetResolvers.length) {
+        const [resolver] = this.packetResolvers.splice(selected, 1);
+        clearTimeout(resolver.timer);
+        if (resolver.stop && !isStop) resolver.reject(new Error(`Run command failed: ${packetData}`));
+        else resolver.resolve(packetData);
       }
     }
   }
@@ -215,7 +239,7 @@ export class GdbProtocol {
   /**
    * Send a command and wait for response
    */
-  private sendCommand(command: string, timeoutMs: number = 10000): Promise<string> {
+  private sendCommand(command: string, timeoutMs: number = 10000, stop = command === '?'): Promise<string> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const idx = this.packetResolvers.findIndex(r => r.resolve === resolve);
@@ -225,7 +249,7 @@ export class GdbProtocol {
         reject(new Error(`GDB command timeout: ${command}`));
       }, timeoutMs);
 
-      this.packetResolvers.push({ resolve, reject, timer });
+      this.packetResolvers.push({ stop, resolve, reject, timer });
       this.sendPacket(command);
     });
   }
@@ -235,7 +259,7 @@ export class GdbProtocol {
    * These commands get a stop reply (S/T packet) when execution stops
    */
   private sendRunCommand(command: string, timeoutMs: number = 30000): Promise<string> {
-    return this.sendCommand(command, timeoutMs);
+    return this.sendCommand(command, timeoutMs, true);
   }
 
   private socketWrite(data: string): void {
@@ -256,6 +280,11 @@ export class GdbProtocol {
       resolver.reject(error);
     }
     this.packetResolvers = [];
+    for (const waiter of this.stopWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+    this.stopWaiters.clear();
   }
 
   // ─── Register Commands ──────────────────────────────────────────────
@@ -266,8 +295,8 @@ export class GdbProtocol {
   async readRegisters(): Promise<M68kRegisters> {
     if (this._isRunning) await this.pause();
     const reply = await this.sendCommand('g');
-    if (reply.length < 144) {
-      throw new Error(`Register reply too short: ${reply.length} chars (expected 144)`);
+    if (!/^[0-9a-fA-F]{144}$/.test(reply)) {
+      throw new Error(`Invalid register reply: ${reply.length} chars (expected 144)`);
     }
 
     const regs: Partial<M68kRegisters> = {};
@@ -383,7 +412,10 @@ export class GdbProtocol {
     if (this._isRunning) await this.pause();
     const hexCmd = Buffer.from(cmd, 'utf8').toString('hex');
     const reply = await this.sendCommand(`qRcmd,${hexCmd}`, 30000);
-    if (reply === 'OK') return 'OK';
+    if (reply === 'OK') {
+      if (/^(checkpoint restore |reset\b)/.test(cmd)) this.pendingStopReply = null;
+      return 'OK';
+    }
     if (reply.startsWith('E')) throw new Error(`Monitor command '${cmd}' failed: ${reply}`);
     if (!reply) throw new Error(`Unsupported monitor command: ${cmd}`);
     // Response may be hex-encoded output
@@ -489,34 +521,11 @@ export class GdbProtocol {
    * returns the pending stop reply immediately. Otherwise sends 0x03 interrupt.
    */
   async pause(): Promise<string> {
-    // If a stop reply arrived asynchronously (breakpoint fired), return it
-    if (this.pendingStopReply) {
-      const reply = this.pendingStopReply;
-      this.pendingStopReply = null;
-      return reply;
-    }
-
-    // If not running, just return
-    if (!this._isRunning) {
-      return 'S00';
-    }
-
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const idx = this.packetResolvers.findIndex(r => r.resolve === resolve);
-        if (idx >= 0) {
-          this.packetResolvers.splice(idx, 1);
-        }
-        reject(new Error('Pause timeout'));
-      }, 10000);
-
-      this.packetResolvers.push({ resolve, reject, timer });
-
-      // Send raw interrupt byte (not a GDB packet)
-      if (this.socket && !this.socket.destroyed) {
-        this.socket.write(Buffer.from([0x03]));
-      }
-    });
+    if (!this.connected) throw new Error('Disconnected');
+    if (!this._isRunning) return this.pendingStopReply ?? 'S00';
+    const stopped = this.waitForStop(10000);
+    this.socketWrite('\x03');
+    return stopped;
   }
 
   /**
