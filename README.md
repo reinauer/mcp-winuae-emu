@@ -391,3 +391,24 @@ Sequences are asynchronous and do not resume execution unless explicitly
 passed `resume: true`. Query `winuae_input` with `action: status`; use
 `action: release` to cancel and release held controls. A sequence requires
 no existing remote held input, and concurrent submissions are rejected.
+
+### Watchpoint evidence
+
+`winuae_watch` adds exact-access watchpoints with aligned `address`, `size`
+(1, 2 or 4 bytes), `access` and optional source groups, value/mask matching,
+`change_only` and `log_only`. Change-only watches require writable-access
+mode and mapped RAM. They compare the old and new value of the entire
+access; the optional mask applies to value matching. A 68000 longword
+store can appear as two word accesses: select the actual bus access width.
+Standard range watchpoints remain available for overlapping accesses.
+
+`last` and `events` return actual access address, size, value, previous
+value when available, instruction PC, source mask and DMA register. The
+64-event ring evicts oldest records and reports `dropped`; reads do not
+consume records. Standard remote CPU and DMA watchpoint hits also enter
+this ring. `clear-events` clears evidence. `log_only` watches neither stop
+execution nor write an unbounded host log. Queries pause execution.
+
+Extended watchpoint IDs are managed separately from standard CPU/DMA
+watchpoints and console entries. Disconnect and checkpoint restore remove
+remote watches and evidence. Existing memwatch CPU/MMU restrictions apply.
