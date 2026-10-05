@@ -412,3 +412,23 @@ execution nor write an unbounded host log. Queries pause execution.
 Extended watchpoint IDs are managed separately from standard CPU/DMA
 watchpoints and console entries. Disconnect and checkpoint restore remove
 remote watches and evidence. Existing memwatch CPU/MMU restrictions apply.
+
+### Explicit session lifecycle
+
+`winuae_attach` connects only to an existing listener; GDB attach stops the
+CPU. `winuae_launch` starts an owned emulator and rejects an occupied port
+before spawning. `winuae_connect` retains its existing attach-or-launch
+behavior. None of these commands changes the user's configuration file.
+
+`winuae_detach` releases remote input and debugger state, resumes the guest
+(unless host-paused), and relinquishes process ownership. The emulator then
+survives MCP exit. `winuae_shutdown` requires a process still owned by this
+MCP server and waits for it to exit. It refuses attached/detached instances.
+`winuae_disconnect` retains its existing behavior: terminate an owned child,
+or disconnect from an externally launched emulator.
+
+`winuae_status` returns structured JSON with connection health, ownership,
+PID and target execution/frame/beam state. It never pauses execution. Host
+UI pauses and debugger stops are reported separately; if the host event
+pump is unavailable the query reports a communication error, not a guessed
+execution state. Cycle counts are strings to preserve integer precision.

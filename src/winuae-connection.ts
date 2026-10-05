@@ -5,6 +5,7 @@ import { GdbProtocol } from './gdb-protocol.js';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as net from 'node:net';
 
 export interface WinUAEConfig {
   winuaePath: string;
@@ -26,9 +27,11 @@ export class WinUAEConnection {
 
   /** Launch WinUAE without modifying the user configuration. */
   async connect(): Promise<void> {
-    if (this.isConnected) {
-      throw new Error('Already connected to WinUAE');
+    if (this.connected || this.process) {
+      throw new Error('Launch requires no connection or owned emulator');
     }
+
+    this.dropConnection();
 
     // WINUAE_PATH accepts an executable, an application bundle, or a directory.
     const configuredPath = path.resolve(this.config.winuaePath);
@@ -47,6 +50,14 @@ export class WinUAEConnection {
     if (!Number.isInteger(this.config.gdbPort) || this.config.gdbPort < 1 || this.config.gdbPort > 65535) {
       throw new Error('Invalid WINUAE_GDB_PORT');
     }
+
+    // Check without connecting: a connection probe would interrupt another
+    // emulator's GDB session. A bind failure must not launch a second child.
+    await new Promise<void>((resolve, reject) => {
+      const probe = net.createServer();
+      probe.once('error', () => reject(new Error(`GDB port ${this.config.gdbPort} is occupied or unavailable; use attach`)));
+      probe.listen({host:'127.0.0.1',port:this.config.gdbPort,exclusive:true}, () => probe.close(error => error ? reject(error) : resolve()));
+    });
 
     // Create log file
     const logDir = path.join(os.tmpdir(), 'winuae-mcp');
@@ -88,6 +99,10 @@ export class WinUAEConnection {
       cwd: path.dirname(exePath),
     });
 
+    // The child inherited the descriptors; the parent must not retain one
+    // for every emulator whose lifetime is handed back by detach.
+    closeLog();
+
     this.process.on('error', (err) => {
       console.error('[WinUAE] Process error:', err);
       try { closeLog(); } catch {}
@@ -115,12 +130,13 @@ export class WinUAEConnection {
    * Connect to an already-running WinUAE instance (no process spawn)
    */
   async connectExisting(): Promise<void> {
-    if (this.isConnected) {
+    if (this.connected) {
       throw new Error('Already connected to WinUAE');
     }
 
     console.error(`[WinUAE] Connecting to existing instance on port ${this.config.gdbPort}`);
-    await this.waitForGdb();
+    this.dropConnection();
+    if (!await this.tryQuickConnect()) throw new Error('No existing WinUAE GDB server is available; attach never launches an emulator');
   }
 
   /**
@@ -153,8 +169,8 @@ export class WinUAEConnection {
    * Returns a status message describing what happened.
    */
   async connectSmart(): Promise<string> {
-    if (this.isConnected && !this.protocol?.connected) await this.cleanup();
-    if (this.isConnected) {
+    if (this.isConnected && !this.protocol?.connected) this.dropConnection();
+    if (this.connected) {
       throw new Error('Already connected to WinUAE');
     }
 
@@ -162,6 +178,8 @@ export class WinUAEConnection {
     if (await this.tryQuickConnect()) {
       return `Connected to existing WinUAE GDB server on port ${this.config.gdbPort}`;
     }
+
+    if (this.process) throw new Error('Owned emulator is not responding; use shutdown before launching again');
 
     // No existing server -- launch WinUAE
     console.error('[WinUAE] No existing GDB server found, launching WinUAE...');
@@ -203,7 +221,7 @@ export class WinUAEConnection {
    * Restart WinUAE with updated configuration (preserves floppy state).
    */
   async restart(): Promise<string> {
-    if (this.isConnected && !this.process) {
+    if (!this.process) {
       throw new Error('Restart requires an instance launched by this MCP server');
     }
     console.error('[WinUAE] Restarting with updated configuration...');
@@ -224,13 +242,40 @@ export class WinUAEConnection {
     console.error('[WinUAE] Disconnected');
   }
 
-  private async cleanup(): Promise<void> {
+  private dropConnection(): void {
     this.isConnected = false;
+    this.protocol?.disconnect();
+    this.protocol = null;
+  }
 
-    if (this.protocol) {
-      this.protocol.disconnect();
-      this.protocol = null;
+  /** Detach hands process lifetime back to the user, including on MCP exit. */
+  async detach(): Promise<void> {
+    try { if (this.protocol?.connected) await this.protocol.detach(); }
+    finally {
+      this.dropConnection();
+      this.process?.unref();
+      this.process = null;
     }
+  }
+
+  async shutdown(): Promise<void> {
+    if (!this.process) throw new Error('Shutdown requires an emulator launched and still owned by this MCP server');
+    await this.cleanup();
+  }
+
+  async status() {
+    const session = { connected:this.connected, owned:!!this.process, pid:this.process?.pid ?? null };
+    if (!this.connected) return { ...session, responsive:false, execution:'disconnected' };
+    try {
+      const target = JSON.parse(await this.getProtocol().sendMonitorCommand('execution-status', true));
+      return { ...session, responsive:true, target };
+    } catch (error) {
+      return { ...session, responsive:false, error:String(error) };
+    }
+  }
+
+  private async cleanup(): Promise<void> {
+    this.dropConnection();
 
     const child = this.process;
     this.process = null;
@@ -261,14 +306,14 @@ export class WinUAEConnection {
   }
 
   /**
-   * Health check: try reading registers
+   * Health check without interrupting execution
    */
   async healthCheck(): Promise<boolean> {
     if (!this.isConnected || !this.protocol) {
       return false;
     }
     try {
-      await this.protocol.readRegisters();
+      await this.protocol.sendMonitorCommand('execution-status', true);
       return true;
     } catch {
       return false;

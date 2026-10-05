@@ -409,7 +409,7 @@ export class GdbProtocol {
    * Returns the response text, or throws on error.
    */
   async sendMonitorCommand(cmd: string, live = false): Promise<string> {
-    if (live && !/^(capabilities$|input )/.test(cmd)) throw new Error('Command is not safe during execution');
+    if (live && !/^(capabilities$|execution-status$|input )/.test(cmd)) throw new Error('Command is not safe during execution');
     if (!live && this._isRunning) await this.pause();
     const hexCmd = Buffer.from(cmd, 'utf8').toString('hex');
     const reply = await this.sendCommand(`qRcmd,${hexCmd}`, 30000);
@@ -549,6 +549,13 @@ export class GdbProtocol {
   /**
    * Disconnect from GDB server
    */
+  async detach(): Promise<void> {
+    try {
+      const reply = await this.sendCommand('D');
+      if (reply !== 'OK') throw new Error(`Detach failed: ${reply}`);
+    } finally { this.disconnect(); }
+  }
+
   disconnect(): void {
     this.rejectAll(new Error('Disconnected'));
     this._isRunning = false;
